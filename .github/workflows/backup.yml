@@ -1,0 +1,94 @@
+# Nightly backup of a Salesforce org's metadata: list everything in the org, pull it, commit what changed, email
+# the result. Settings live in the repo's secrets and variables; see the README.
+name: Metadata backup
+
+on:
+  schedule:
+    - cron: "0 11 * * *"   # 11:00 UTC every day; change it here
+  workflow_dispatch:        # the Run workflow button on the Actions tab
+
+permissions:
+  contents: write
+
+concurrency: backup
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install the Salesforce CLI
+        run: npm install --global @salesforce/cli
+
+      - name: Sign in to Salesforce
+        env:
+          SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+        run: |
+          printf '%s\n' "$SF_JWT_KEY" > "$RUNNER_TEMP/server.key"
+          sf org login jwt \
+            --client-id "${{ secrets.SF_CLIENT_ID }}" \
+            --jwt-key-file "$RUNNER_TEMP/server.key" \
+            --username "${{ vars.SF_USERNAME }}" \
+            --instance-url "${{ vars.SF_LOGIN_URL || 'https://login.salesforce.com' }}" \
+            --alias org
+          rm "$RUNNER_TEMP/server.key"
+
+      - name: List everything in the org
+        env:
+          # CleanDataService comes back in a different order every pull, so it would show as changed every night.
+          EXCLUDED_METADATA: ${{ vars.EXCLUDED_METADATA || 'CleanDataService' }}
+          # Blank: managed and unlocked packages are left out (they're the vendor's). "managed", "unlocked" or both.
+          INCLUDE_PACKAGES: ${{ vars.INCLUDE_PACKAGES }}
+        run: |
+          args=(--from-org org --name package --output-dir manifest)
+          for t in $EXCLUDED_METADATA; do args+=(--excluded-metadata "$t"); done
+          for p in $INCLUDE_PACKAGES; do args+=(--include-packages "$p"); done
+          sf project generate manifest "${args[@]}"
+
+      - name: Pull it
+        env:
+          # One pull takes at most 10,000 files, so the list is pulled in batches under this.
+          BATCH_LIMIT: ${{ vars.BATCH_LIMIT || '9000' }}
+        run: |
+          python3 .github/scripts/split_manifest.py manifest/package.xml "$RUNNER_TEMP/batches" "$BATCH_LIMIT"
+          # Start from empty, so something deleted in the org shows as deleted here.
+          rm -rf force-app && mkdir force-app
+          mkdir -p "$RUNNER_TEMP/retrieve"
+          for batch in "$RUNNER_TEMP"/batches/batch-*.xml; do
+            echo "Pulling $(basename "$batch")"
+            sf project retrieve start --manifest "$batch" --target-org org --ignore-conflicts --wait 40 --json \
+              > "$RUNNER_TEMP/retrieve/$(basename "$batch" .xml).json"
+          done
+
+      - name: Commit what changed
+        id: commit
+        run: |
+          git config user.name "${{ vars.COMMIT_NAME || 'github-actions[bot]' }}"
+          git config user.email "${{ vars.COMMIT_EMAIL || '41898282+github-actions[bot]@users.noreply.github.com' }}"
+          git add -A
+          git -c core.quotepath=false diff --cached --name-status > "$RUNNER_TEMP/changes.txt"
+          if [ -s "$RUNNER_TEMP/changes.txt" ]; then
+            git commit -q -m "Backup $(date -u +%Y-%m-%d): $(wc -l < "$RUNNER_TEMP/changes.txt") files changed"
+            git push
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        # The summary goes on this run's page; with EMAIL on, Salesforce also emails it (see report.py).
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          ORG_LABEL: ${{ vars.ORG_LABEL }}
+          EMAIL: ${{ vars.EMAIL }}
+          MAIL_TO: ${{ vars.MAIL_TO }}
+          MAIL_FROM: ${{ vars.MAIL_FROM }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: python3 .github/scripts/report.py "$RUNNER_TEMP/changes.txt" "$RUNNER_TEMP/retrieve"

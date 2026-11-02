@@ -1,0 +1,5 @@
+.sf/
+.sfdx/
+*.key
+setup/out/
+__pycache__/
