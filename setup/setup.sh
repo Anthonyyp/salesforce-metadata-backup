@@ -17,12 +17,15 @@ out="$here/out"
 mkdir -p "$out"
 # python3 on Mac and Linux; on Windows "python3" can be a Store stub, so try it before trusting it.
 py=python3; $py -c 1 2>/dev/null || py=python
+command -v "$py" > /dev/null || { echo "Needs Python (python3 or python)." >&2; exit 1; }
+command -v openssl > /dev/null || { echo "Needs openssl, to make the key." >&2; exit 1; }
 json_field() { $py -c "import json,sys; print(json.load(sys.stdin)['result']['$1'])"; }
 
-username=$(sf org display -o "$org" --json | json_field username)
-instance=$(sf org display -o "$org" --json | json_field instanceUrl)
+display=$(sf org display -o "$org" --json)
+username=$(json_field username <<< "$display")
+instance=$(json_field instanceUrl <<< "$display")
 case "$instance" in
-  *sandbox*|*.cs*) login_url=https://test.salesforce.com ;;
+  *sandbox*|*.scratch.*|*://cs[0-9]*|*.cs[0-9]*) login_url=https://test.salesforce.com ;;
   *) login_url=https://login.salesforce.com ;;
 esac
 email=$(sf data query -o "$org" -q "SELECT Email FROM User WHERE Username = '$username'" --json   | $py -c "import json,sys; print(json.load(sys.stdin)['result']['records'][0]['Email'])")
@@ -31,7 +34,7 @@ echo "Org: $username ($instance)"
 if [ ! -f "$out/server.key" ]; then
   # MSYS2_ARG_CONV_EXCL: on Git Bash for Windows, stops "/CN=..." being turned into a file path.
   MSYS2_ARG_CONV_EXCL="/CN" openssl req -x509 -newkey rsa:2048 -nodes -days 1095 \
-    -keyout "$out/server.key" -out "$out/server.crt" -subj "/CN=salesforce-metadata-backup" 2>/dev/null
+    -keyout "$out/server.key" -out "$out/server.crt" -subj "/CN=salesforce-metadata-backup"
   echo "Made a key and a certificate (good for 3 years): $out"
 fi
 
@@ -40,6 +43,7 @@ proj=$(mktemp -d)
 mkdir -p "$proj/force-app/main/default/connectedApps"
 echo '{"packageDirectories":[{"path":"force-app","default":true}],"sourceApiVersion":"64.0"}' > "$proj/sfdx-project.json"
 cert=$(cat "$out/server.crt")
+profile_xml=$(printf '%s' "$profile" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
 cat > "$proj/force-app/main/default/connectedApps/Metadata_Backup.connectedApp-meta.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <ConnectedApp xmlns="http://soap.sforce.com/2006/04/metadata">
@@ -52,19 +56,22 @@ cat > "$proj/force-app/main/default/connectedApps/Metadata_Backup.connectedApp-m
         <isAdminApproved>true</isAdminApproved>
         <isConsumerSecretOptional>false</isConsumerSecretOptional>
         <scopes>Api</scopes>
+        <!-- JWT sign-in refuses an app without it: "refresh_token scope is required". -->
         <scopes>RefreshToken</scopes>
     </oauthConfig>
     <oauthPolicy>
+        <!-- GitHub's runners have no fixed IP, so the org's IP ranges can't apply; the certificate is the lock. -->
         <ipRelaxation>BYPASS</ipRelaxation>
         <refreshTokenPolicy>infinite</refreshTokenPolicy>
     </oauthPolicy>
-    <profileName>$profile</profileName>
+    <profileName>$profile_xml</profileName>
 </ConnectedApp>
 EOF
 (cd "$proj" && sf project deploy start -o "$org" --source-dir force-app > /dev/null \
   && sf project retrieve start -o "$org" -m ConnectedApp:Metadata_Backup > /dev/null)
 client_id=$(sed -n 's:.*<consumerKey>\(.*\)</consumerKey>.*:\1:p' "$proj/force-app/main/default/connectedApps/Metadata_Backup.connectedApp-meta.xml")
 rm -rf "$proj"
+[ -n "$client_id" ] || { echo "The connected app came back without a consumer key; nothing was set." >&2; exit 1; }
 echo "Connected app Metadata Backup is in the org."
 
 if [ -n "$repo" ] && command -v gh > /dev/null; then

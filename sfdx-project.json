@@ -1,5 +1,4 @@
 {
   "packageDirectories": [{ "path": "force-app", "default": true }],
-  "name": "salesforce-metadata-backup",
-  "sourceApiVersion": "64.0"
+  "name": "salesforce-metadata-backup"
 }

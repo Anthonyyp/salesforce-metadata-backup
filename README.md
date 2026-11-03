@@ -4,7 +4,12 @@ A nightly backup of a Salesforce org's setup into a GitHub repo, run by GitHub A
 Apex class, profile, permission set and setting, as Salesforce source, with a commit each night that something
 changed and an email saying what. Setup only, not records.
 
-Free on GitHub's free plan: private repos get 2,000 Action minutes a month, and a run takes about 3 to 5.
+> **Keep your copy private.** This template is public; the repo you make from it holds your org's whole setup,
+> and that can include secrets: an API key someone put in a custom metadata record or a custom setting, for one.
+> Use this template lets you pick Public: don't.
+
+Free on GitHub's free plan: private repos get 2,000 Action minutes a month. A small org's run takes 3 to 5; a big
+org's first run can take an hour, and later ones a fraction of that.
 
 ## What it does each night
 
@@ -16,9 +21,11 @@ Free on GitHub's free plan: private repos get 2,000 Action minutes a month, and 
    change, line by line.
 5. **Reports the result** on the run's page in GitHub: how many files changed and which, with a link to the
    changes. With `EMAIL` on, Salesforce emails it too, from the org itself: no mail server or mailbox needed.
-   When a run fails, GitHub emails the repo's owner on its own.
+   When a run fails, GitHub emails you on its own (if your Actions notifications are on). That goes to the account
+   that last edited the workflow's schedule, not to `MAIL_TO`. For a repo in an organization, Settings →
+   Notifications → Custom routing sets which of that account's addresses it uses.
 
-### Two things it handles that a plain retrieve doesn't
+### What it handles that a plain retrieve doesn't
 
 - **The 10,000-file limit.** One pull takes at most 10,000 files. `split_manifest.py` pulls in batches, but keeps
   everything profiles, permission sets and translations depend on in one batch: a profile pulled without the
@@ -26,11 +33,25 @@ Free on GitHub's free plan: private repos get 2,000 Action minutes a month, and 
   templates, documents and letterheads, which nothing else lists, are split off. They're what grows.
 - **Noise.** `CleanDataService` (the built-in geocoding rules) comes back in a different order every pull, so it's
   left out by default; otherwise every night would show one file changed.
+- **A bad night.** Failed pulls, and types that fail to list (the CLI leaves those out without a word), stop the
+  run before anything is committed. An item the org listed but didn't hand over is kept as it was, not recorded as
+  deleted. What raises no error is the backup user losing access: Salesforce just shows it less, and the backup
+  records the rest as deleted. So a night that deletes more than a fifth of the backup (`ALERT_DELETED_PERCENT`),
+  or of one type with 10 files or more, or the last of any type, says WARNING in the email's subject and on the
+  run's page. One that would delete more than half (`BLOCK_DELETED_PERCENT`) isn't committed. Once access is fixed,
+  the next run puts the files back. With email off, warnings show only on the run's page.
+- **New metadata.** The project has no API version, so the CLI uses the org's newest, and whatever Salesforce adds
+  in a release is listed and backed up. The night after a release can show many files changed. For quiet release
+  nights instead, pin one: `"sourceApiVersion": "66.0"` in `sfdx-project.json`. Then nothing newer is backed up
+  until you raise it.
+
+Installed packages' parts are left out by default (they're the vendor's). Profiles and permission sets then come back
+without their permissions on those packages' objects, fields and classes. Set `INCLUDE_PACKAGES` to `managed` for
+complete profiles.
 
 ## Set it up for an org
 
-1. **Make a repo from this template** (Use this template → Create a new repository). Make it private: an org's
-   setup is not something to publish.
+1. **Make a repo from this template** (Use this template → Create a new repository). **Private.**
 2. **Run the setup script** on a computer with the Salesforce CLI signed in to the org, plus `openssl`, and
    optionally the GitHub CLI:
 
@@ -40,12 +61,26 @@ Free on GitHub's free plan: private repos get 2,000 Action minutes a month, and 
 
    It makes a key and certificate (good for 3 years), creates the connected app **Metadata Backup** in the org
    (certificate sign-in, scopes `api` and `refresh_token`, pre-authorized for that profile), and sets the repo's
-   `SF_*` secrets and variables. Without the GitHub CLI it prints them for you to enter. Keep the private key from
+   `SF_*` secrets and variables. JWT sign-in needs `refresh_token` even though it never uses one; without it
+   Salesforce refuses with "refresh_token scope is required". Without the GitHub CLI it prints them for you to enter. Keep the private key from
    `setup/out/` in your password manager, then delete it there.
 
-   No command line? Make the same connected app in Setup → App Manager → New Connected App (Enable OAuth Settings;
-   Use digital signatures with the certificate; the two scopes; then Manage → Edit Policies → *Admin approved
-   users are pre-authorized* and add the profile), and enter the settings below by hand.
+   No setup script? You still need `openssl` for the key and certificate:
+
+   ```
+   openssl req -x509 -newkey rsa:2048 -nodes -days 1095 -keyout server.key -out server.crt -subj "/CN=metadata-backup"
+   ```
+
+   Then make the same connected app in Setup → App Manager → New Connected App (Enable OAuth Settings; Use digital
+   signatures with `server.crt`; the two scopes; then Manage → Edit Policies → *Admin approved users are
+   pre-authorized* and add the profile, and IP Relaxation *Relax IP restrictions*), and enter the settings below by
+   hand.
+
+   **About the key.** GitHub's runners have no fixed IP address, so the app relaxes the org's IP restrictions; the
+   certificate is what keeps others out. The app is pre-authorized for a whole profile, so anyone with the private
+   key can sign in, from anywhere, as **any user with that profile**: give the backup user a profile of its own
+   (below) rather than System Administrator. Keep the key only in the repo's secrets and your password manager. If it leaks, delete the certificate from the
+   connected app (or the app) at once, then make a new key (below).
 3. **Turn the email on** if you want it: `EMAIL` and `MAIL_TO` (below). Salesforce sends it, so the org's email
    deliverability must allow it: sandboxes start at *System email only*, which blocks it.
 4. **Run it once:** Actions → Metadata backup → Run workflow. The first run commits everything. A new connected app
@@ -63,20 +98,25 @@ Settings → Secrets and variables → Actions.
 | Variable | `SF_LOGIN_URL` | `https://login.salesforce.com` (default), or `https://test.salesforce.com` for a sandbox |
 | Variable | `ORG_LABEL` | The org's name in the email |
 | Variable | `EMAIL` | `off` (default), `self` (sent from the backup user's address) or `org` (from `MAIL_FROM`) |
-| Variable | `MAIL_TO` | Who gets the email; commas for more than one |
+| Variable | `MAIL_TO` | Who gets the email; commas for more than one, up to 5 |
 | Variable | `MAIL_FROM` | With `EMAIL` `org`: the organization-wide address it's sent from, verified in Setup → Organization-Wide Addresses (a no-reply works) |
 | Variable | `COMMIT_NAME`, `COMMIT_EMAIL` | Who the nightly commits are by (default: GitHub Actions) |
-| Variable | `EXCLUDED_METADATA` | Types to leave out, spaces between (default `CleanDataService`); add `Report Dashboard` to skip those |
-| Variable | `INCLUDE_PACKAGES` | `managed`, `unlocked` or both, to back up installed packages' parts too (default: neither) |
+| Variable | `EXCLUDED_METADATA` | Types to leave out, spaces between (default `CleanDataService`). Setting it replaces the default: to skip reports and dashboards too, `CleanDataService Report Dashboard` |
+| Variable | `INCLUDE_PACKAGES` | `managed`, `unlocked` or both, to back up installed packages' parts too (default: neither, and profiles lack those packages' permissions) |
+| Variable | `ALERT_DELETED_PERCENT` | A night that deletes more than this share of the backup, or of one type (10 files or more), or the last of a type, says WARNING in the email and on the run's page (default 20; `off` for never) |
+| Variable | `BLOCK_DELETED_PERCENT` | A night that would delete more than this share isn't committed, and the run fails (default 50; `off` for never). Set it to `off` for one run if the org really lost that much |
+| Variable | `CERT_EXPIRES` | The sign-in certificate's expiry date, `YYYY-MM-DD`. From 30 days before, the email and the run's page say to make a new one (default: blank, no check) |
 | Variable | `BATCH_LIMIT` | Files per pull (default 9,000) |
 
-The schedule is the `cron` line at the top of `.github/workflows/backup.yml`: 11:00 UTC every day.
+The schedule is the `cron` line at the top of `.github/workflows/backup.yml`: 11:00 UTC every day. The Salesforce
+CLI version is pinned in the same file (`@salesforce/cli@2.156.5`); raise it now and then, and run the workflow by
+hand once after.
 
 ## The backup user
 
 The user needs API Enabled, View Setup and Configuration, and Modify Metadata Through Metadata API Functions
-(the Metadata API's retrieve needs it, though the backup never deploys anything). An admin works; a dedicated
-integration user is cleaner. Whatever that user can't see isn't backed up: private dashboards, for example, show in
+(the Metadata API's retrieve needs it, though the backup never deploys anything). An admin works, but the key then
+reaches every admin (above): a dedicated integration user with its own profile is safer. Whatever that user can't see isn't backed up: private dashboards, for example, show in
 the email as items listed but not handed over.
 
 ## Restoring
@@ -87,5 +127,7 @@ file's history on GitHub.
 
 ## Renewing the key
 
-The certificate lasts 3 years. Before it runs out, delete `setup/out/`, run `setup/setup.sh` again (it updates the
-same connected app), and the new key goes into the repo's secrets.
+The certificate lasts 3 years. Put its expiry date in `CERT_EXPIRES` and the email reminds you 30 days ahead; the
+date is `openssl x509 -enddate -noout -in server.crt`. Before it runs out, delete `setup/out/`, run `setup/setup.sh`
+again (it updates the same connected app), and the new key goes into the repo's secrets. Then update
+`CERT_EXPIRES`.

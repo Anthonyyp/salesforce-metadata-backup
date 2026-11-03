@@ -9,6 +9,7 @@ Salesforce itself through its Send Email action, so no mail server or mailbox is
   self  from the backup user's own address
   org   from the organization-wide address in MAIL_FROM
 """
+import datetime
 import html
 import json
 import os
@@ -19,7 +20,7 @@ import tempfile
 from collections import defaultdict
 
 PREFIX = "force-app/main/default/"
-KIND = {"A": "added", "M": "changed", "D": "deleted"}
+KIND = {"A": "added", "M": "changed", "D": "deleted", "R": "renamed", "C": "copied", "T": "changed"}
 MAX_LISTED = 300
 API = "v64.0"
 
@@ -30,7 +31,7 @@ def read_changes(path):
         for line in open(path, encoding="utf-8"):
             parts = line.rstrip("\n").split("\t")
             if len(parts) >= 2:
-                rows.append((KIND.get(parts[0][0], "renamed"), parts[-1]))
+                rows.append((KIND.get(parts[0][0], "changed"), parts[-1]))
     return rows
 
 
@@ -42,6 +43,9 @@ def friendly(path):
         return "other", path
     parts = path[len(PREFIX):].split("/")
     parts[-1] = parts[-1].split(".")[0]
+    # objects/Account/Account.object-meta.xml is the object itself: "Account", not "Account / Account".
+    if len(parts) > 2 and parts[-1] == parts[-2]:
+        parts.pop()
     return parts[0], " / ".join(parts[1:]) or parts[0]
 
 
@@ -59,11 +63,40 @@ def retrieve_warnings(folder):
     return total, batches
 
 
+def cert_line(env, today=None):
+    """One line when the sign-in certificate (CERT_EXPIRES, YYYY-MM-DD) expires within 30 days; else blank."""
+    value = (env.get("CERT_EXPIRES") or "").strip()
+    if not value:
+        return ""
+    try:
+        expires = datetime.date.fromisoformat(value)
+    except ValueError:
+        return f"CERT_EXPIRES is {value!r}: it takes a date, YYYY-MM-DD."
+    if expires - (today or datetime.date.today()) > datetime.timedelta(days=30):
+        return ""
+    return f"The sign-in certificate expires {expires.day} {expires:%b %Y}: make a new one (README)."
+
+
 def build(env, rows, warnings, batches):
     """The report as (subject, html, markdown)."""
+    subject, body, summary = build_report(env, rows, warnings, batches)
+    cert = cert_line(env)
+    if cert:
+        body = f"<p><b>{html.escape(cert)}</b></p>{body}"
+        summary = f"**{cert}**\n\n{summary}"
+    return subject, body, summary
+
+
+def build_report(env, rows, warnings, batches):
     org = env.get("ORG_LABEL") or "Salesforce"
     run_url, repo_url = env["RUN_URL"], env["REPO_URL"]
+    deleted, had = int(env.get("DELETED") or 0), int(env.get("HAD") or 0)
     if env.get("JOB_STATUS") != "success":
+        if env.get("BLOCKED") == "true":
+            why = (f"Not committed: {deleted:,} of {had:,} files would have been deleted, over"
+                   f" BLOCK_DELETED_PERCENT ({env.get('BLOCK_DELETED_PERCENT')}). Usually the backup user lost access.")
+            return (f"{org} metadata backup BLOCKED: {deleted:,} files would be deleted",
+                    f'<p>{html.escape(why)} <a href="{run_url}">The run</a>.</p>', f"**{why}**")
         return (f"{org} metadata backup FAILED",
                 f'<p>The backup didn\'t finish. <a href="{run_url}">The run\'s log</a> says why.</p>',
                 f"**The backup didn't finish.** The steps above say why.")
@@ -92,12 +125,23 @@ def build(env, rows, warnings, batches):
     if warnings:
         note += (f" {warnings} items listed but not handed over (normal: Salesforce's built-in items for features"
                  " that aren't turned on, and anything the backup user can't see, such as private dashboards).")
+    kept = int(env.get("KEPT") or 0)
+    if kept:
+        note += (f" Kept {kept:,} item{'s' if kept != 1 else ''} the org listed but didn't hand over, as they were"
+                 " (listed means not deleted).")
     subject = f"{org} metadata backup: {n} file{'s' if n != 1 else ''} changed"
+    if env.get("ALERT") == "true":
+        # Over ALERT_DELETED_PERCENT: say it first, since lost access looks exactly like this.
+        subject = f"{org} metadata backup: WARNING, {deleted:,} files deleted"
+        types = env.get("ALERT_TYPES") or ""
+        by_type = f" By type: {types}." if types else ""
+        lead = (f"WARNING: {deleted:,} of {had:,} files deleted.{by_type} If nobody removed that much, check the"
+                f" backup user's access: once it's fixed, the next run puts them back. {lead}")
     body = (f"<p>{html.escape(lead)}</p>{link_h}{''.join(h)}"
             f'<p style="color:#666">{html.escape(note)}</p>'
             f'<p style="color:#666">The backup: <a href="{repo_url}">{repo_url}</a></p>')
     summary = "\n".join([f"**{lead}**", "", link_md] + md + ["", note])
-    return subject, f'<div style="font-family:Arial,sans-serif;font-size:14px">{body}</div>', summary
+    return subject, body, summary
 
 
 def send_by_salesforce(env, mode, subject, body):
@@ -134,6 +178,9 @@ def main():
         sys.exit("EMAIL is org but MAIL_FROM is blank: which organization-wide address sends it?")
     warnings, batches = retrieve_warnings(sys.argv[2])
     subject, body, summary = build(env, read_changes(sys.argv[1]), warnings, batches)
+    body = f'<div style="font-family:Arial,sans-serif;font-size:14px">{body}</div>'
+    if cert_line(env):
+        print(f"::warning::{cert_line(env)}")
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
             f.write(f"## {subject}\n\n{summary}\n")
@@ -141,7 +188,7 @@ def main():
         print(f"{subject} (EMAIL is off)")
         return
     if env.get("JOB_STATUS") != "success":
-        print(f"{subject} (no email: GitHub emails the repo's owner when a run fails)")
+        print(f"{subject} (no email: GitHub emails you when a run fails)")
         return
     send_by_salesforce(env, mode, subject, body)
     print(f"Emailed {env['MAIL_TO']}: {subject}")

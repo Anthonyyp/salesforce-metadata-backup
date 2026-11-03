@@ -14,8 +14,11 @@ concurrency: backup
 
 jobs:
   backup:
+    # Skipped until the repo is set up, so the template itself (and a fresh copy) doesn't fail every night.
+    if: ${{ vars.SF_USERNAME != '' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # A big org's first run can take an hour or more; minutes are only used as they're spent.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
@@ -24,18 +27,23 @@ jobs:
           node-version: 22
 
       - name: Install the Salesforce CLI
-        run: npm install --global @salesforce/cli
+        # Pinned, so a new CLI release can't change a night's run unannounced. Raise it by hand now and then.
+        run: npm install --global @salesforce/cli@2.156.5
 
       - name: Sign in to Salesforce
+        # Settings reach the shell as environment variables, never pasted into the script.
         env:
           SF_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_USERNAME: ${{ vars.SF_USERNAME }}
+          SF_LOGIN_URL: ${{ vars.SF_LOGIN_URL || 'https://login.salesforce.com' }}
         run: |
           printf '%s\n' "$SF_JWT_KEY" > "$RUNNER_TEMP/server.key"
           sf org login jwt \
-            --client-id "${{ secrets.SF_CLIENT_ID }}" \
+            --client-id "$SF_CLIENT_ID" \
             --jwt-key-file "$RUNNER_TEMP/server.key" \
-            --username "${{ vars.SF_USERNAME }}" \
-            --instance-url "${{ vars.SF_LOGIN_URL || 'https://login.salesforce.com' }}" \
+            --username "$SF_USERNAME" \
+            --instance-url "$SF_LOGIN_URL" \
             --alias org
           rm "$RUNNER_TEMP/server.key"
 
@@ -46,10 +54,15 @@ jobs:
           # Blank: managed and unlocked packages are left out (they're the vendor's). "managed", "unlocked" or both.
           INCLUDE_PACKAGES: ${{ vars.INCLUDE_PACKAGES }}
         run: |
+          # The CLI needs the project folder to exist, even on a new copy's first run.
+          mkdir -p force-app
           args=(--from-org org --name package --output-dir manifest)
           for t in $EXCLUDED_METADATA; do args+=(--excluded-metadata "$t"); done
           for p in $INCLUDE_PACKAGES; do args+=(--include-packages "$p"); done
-          sf project generate manifest "${args[@]}"
+          since=$(date +%s%3N)
+          # A type that fails to list is left out without a word, except in the debug log: check it.
+          SF_LOG_LEVEL=debug sf project generate manifest "${args[@]}"
+          python3 .github/scripts/check_listing.py "$since"
 
       - name: Pull it
         env:
@@ -62,17 +75,50 @@ jobs:
           mkdir -p "$RUNNER_TEMP/retrieve"
           for batch in "$RUNNER_TEMP"/batches/batch-*.xml; do
             echo "Pulling $(basename "$batch")"
-            sf project retrieve start --manifest "$batch" --target-org org --ignore-conflicts --wait 40 --json \
-              > "$RUNNER_TEMP/retrieve/$(basename "$batch" .xml).json"
+            out="$RUNNER_TEMP/retrieve/$(basename "$batch" .xml).json"
+            # With --json a failed pull still exits 0, and committing it would delete that batch's files: check.
+            if ! sf project retrieve start --manifest "$batch" --target-org org --ignore-conflicts --wait 40 --json \
+                > "$out" || ! jq -e '.result.status == "Succeeded"' "$out" > /dev/null; then
+              echo "The pull failed:"
+              jq '{message, status: .result.status, error: .result.errorMessage, messages: .result.messages}' "$out" \
+                || cat "$out"
+              exit 1
+            fi
           done
 
       - name: Commit what changed
         id: commit
+        env:
+          COMMIT_NAME: ${{ vars.COMMIT_NAME || 'github-actions[bot]' }}
+          COMMIT_EMAIL: ${{ vars.COMMIT_EMAIL || '41898282+github-actions[bot]@users.noreply.github.com' }}
+          # A night that deletes a big share of the backup is usually lost access, not a real cleanup.
+          # Over ALERT (in all, or for one type) the email and summary say so; over BLOCK nothing is committed.
+          # "off" turns either off.
+          ALERT_DELETED_PERCENT: ${{ vars.ALERT_DELETED_PERCENT || '20' }}
+          BLOCK_DELETED_PERCENT: ${{ vars.BLOCK_DELETED_PERCENT || '50' }}
         run: |
-          git config user.name "${{ vars.COMMIT_NAME || 'github-actions[bot]' }}"
-          git config user.email "${{ vars.COMMIT_EMAIL || '41898282+github-actions[bot]@users.noreply.github.com' }}"
+          git config user.name "$COMMIT_NAME"
+          git config user.email "$COMMIT_EMAIL"
+          # Items the org listed tonight but didn't hand over haven't been deleted: keep their files as they were.
+          kept=$(node .github/scripts/keep_undelivered.js "$RUNNER_TEMP/retrieve")
+          echo "kept=$kept" >> "$GITHUB_OUTPUT"
           git add -A
           git -c core.quotepath=false diff --cached --name-status > "$RUNNER_TEMP/changes.txt"
+          python3 .github/scripts/deletions.py "$RUNNER_TEMP/changes.txt" "$ALERT_DELETED_PERCENT" > "$RUNNER_TEMP/deletions.txt"
+          cat "$RUNNER_TEMP/deletions.txt" >> "$GITHUB_OUTPUT"
+          deleted=$(sed -n 's/^deleted=//p' "$RUNNER_TEMP/deletions.txt")
+          had=$(sed -n 's/^had=//p' "$RUNNER_TEMP/deletions.txt")
+          block=$BLOCK_DELETED_PERCENT
+          if [[ "$block" =~ ^[0-9]+$ ]] && [ "$had" -gt 0 ] && [ $((deleted * 100)) -gt $((had * block)) ]; then
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            echo "Not committed: $deleted of $had files would be deleted, over BLOCK_DELETED_PERCENT ($BLOCK_DELETED_PERCENT)."
+            echo "If the org really lost that much, set BLOCK_DELETED_PERCENT to off for one run."
+            exit 1
+          fi
+          if grep -q '^alert=true' "$RUNNER_TEMP/deletions.txt"; then
+            types=$(sed -n 's/^alert_types=//p' "$RUNNER_TEMP/deletions.txt")
+            echo "::warning::$deleted of $had files deleted${types:+ (by type: $types)}. If nobody removed that much, check the backup user's access."
+          fi
           if [ -s "$RUNNER_TEMP/changes.txt" ]; then
             git commit -q -m "Backup $(date -u +%Y-%m-%d): $(wc -l < "$RUNNER_TEMP/changes.txt") files changed"
             git push
@@ -85,6 +131,14 @@ jobs:
         env:
           JOB_STATUS: ${{ job.status }}
           SHA: ${{ steps.commit.outputs.sha }}
+          DELETED: ${{ steps.commit.outputs.deleted }}
+          HAD: ${{ steps.commit.outputs.had }}
+          ALERT: ${{ steps.commit.outputs.alert }}
+          ALERT_TYPES: ${{ steps.commit.outputs.alert_types }}
+          CERT_EXPIRES: ${{ vars.CERT_EXPIRES }}
+          BLOCKED: ${{ steps.commit.outputs.blocked }}
+          BLOCK_DELETED_PERCENT: ${{ vars.BLOCK_DELETED_PERCENT || '50' }}
+          KEPT: ${{ steps.commit.outputs.kept }}
           ORG_LABEL: ${{ vars.ORG_LABEL }}
           EMAIL: ${{ vars.EMAIL }}
           MAIL_TO: ${{ vars.MAIL_TO }}
