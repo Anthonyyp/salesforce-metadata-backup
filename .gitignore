@@ -3,3 +3,4 @@
 *.key
 setup/out/
 __pycache__/
+*.crt

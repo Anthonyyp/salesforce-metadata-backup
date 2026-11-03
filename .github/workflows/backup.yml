@@ -49,15 +49,24 @@ jobs:
 
       - name: List everything in the org
         env:
-          # CleanDataService comes back in a different order every pull, so it would show as changed every night.
-          EXCLUDED_METADATA: ${{ vars.EXCLUDED_METADATA || 'CleanDataService' }}
+          # "off" leaves out reports and dashboards (report types stay: they're setup, not users' work).
+          REPORTS: ${{ vars.REPORTS || 'on' }}
+          # More types to leave out, added to the defaults below.
+          EXCLUDED_METADATA: ${{ vars.EXCLUDED_METADATA }}
           # Blank: managed and unlocked packages are left out (they're the vendor's). "managed", "unlocked" or both.
           INCLUDE_PACKAGES: ${{ vars.INCLUDE_PACKAGES }}
         run: |
           # The CLI needs the project folder to exist, even on a new copy's first run.
           mkdir -p force-app
+          # CleanDataService comes back in a different order every pull, so it would show as changed every night.
+          excluded="CleanDataService $EXCLUDED_METADATA"
+          case "$REPORTS" in
+            on) ;;
+            off) excluded="$excluded Report Dashboard" ;;
+            *) echo "REPORTS is '$REPORTS': it takes on or off"; exit 1 ;;
+          esac
           args=(--from-org org --name package --output-dir manifest)
-          for t in $EXCLUDED_METADATA; do args+=(--excluded-metadata "$t"); done
+          for t in $excluded; do args+=(--excluded-metadata "$t"); done
           for p in $INCLUDE_PACKAGES; do args+=(--include-packages "$p"); done
           since=$(date +%s%3N)
           # A type that fails to list is left out without a word, except in the debug log: check it.

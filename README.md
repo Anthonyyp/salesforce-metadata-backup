@@ -13,7 +13,7 @@ org's first run can take an hour, and later ones a fraction of that.
 
 ## What it does each night
 
-1. **Signs in** to the org by JWT, through a connected app, with a key kept in the repo's secrets.
+1. **Signs in** to the org by JWT, through an External Client App, with a key kept in the repo's secrets.
 2. **Lists everything in the org** into `manifest/package.xml` (`sf project generate manifest --from-org`), so
    something new in the org is backed up without anyone adding it.
 3. **Pulls it** into `force-app/`, starting from empty so something deleted in the org shows as deleted.
@@ -51,40 +51,68 @@ complete profiles.
 
 ## Set it up for an org
 
+Two ways: by hand in Setup, or the setup script. Same result. Either way you need `openssl` for the key (Git Bash
+has it on Windows).
+
 1. **Make a repo from this template** (Use this template → Create a new repository). **Private.**
-2. **Run the setup script** on a computer with the Salesforce CLI signed in to the org, plus `openssl`, and
-   optionally the GitHub CLI:
+2. **The sign-in.** By hand or by script, below.
+3. **Turn the email on** if you want it: `EMAIL` and `MAIL_TO` (below). Salesforce sends it, so the org's email
+   deliverability must allow it: sandboxes start at *System email only*, which blocks it.
+4. **Run it once:** Actions → Metadata backup → Run workflow. The first run commits everything. A new app can take a
+   few minutes before it accepts sign-ins.
 
-   ```
-   setup/setup.sh <org alias> "<backup user's profile>" <owner/repo>
-   ```
+### By hand
 
-   It makes a key and certificate (good for 3 years), creates the connected app **Metadata Backup** in the org
-   (certificate sign-in, scopes `api` and `refresh_token`, pre-authorized for that profile), and sets the repo's
-   `SF_*` secrets and variables. JWT sign-in needs `refresh_token` even though it never uses one; without it
-   Salesforce refuses with "refresh_token scope is required". Without the GitHub CLI it prints them for you to enter. Keep the private key from
-   `setup/out/` in your password manager, then delete it there.
-
-   No setup script? You still need `openssl` for the key and certificate:
+1. **The key and certificate**, in a folder outside the repo:
 
    ```
    openssl req -x509 -newkey rsa:2048 -nodes -days 1095 -keyout server.key -out server.crt -subj "/CN=metadata-backup"
+   openssl x509 -enddate -noout -in server.crt
    ```
 
-   Then make the same connected app in Setup → App Manager → New Connected App (Enable OAuth Settings; Use digital
-   signatures with `server.crt`; the two scopes; then Manage → Edit Policies → *Admin approved users are
-   pre-authorized* and add the profile, and IP Relaxation *Relax IP restrictions*), and enter the settings below by
-   hand.
+   The second line prints the expiry date, for `CERT_EXPIRES`.
+2. **The app.** Setup → App Manager → the arrow next to New App → **New External Client App**.
+   - External Client App Name `Metadata Backup`; Contact Email yours; Distribution State **Local**.
+   - **Enable OAuth.** Callback URL `http://localhost:1717/OauthRedirect`. Selected OAuth Scopes: *Manage user data
+     via APIs (api)* and *Perform requests at any time (refresh_token, offline_access)*. JWT sign-in refuses an app
+     without `refresh_token` ("refresh_token scope is required"), though it never uses one.
+   - **Enable JWT Bearer Flow**, and upload `server.crt`.
+   - Create.
+3. **Its policies.** The app → Policies → Edit.
+   - App Policies: move the backup user's profile to **Selected Profiles** (or a permission set to Selected
+     Permission Sets).
+   - OAuth Policies: Permitted Users **Admin approved users are pre-authorized**; IP Relaxation **Relax IP
+     restrictions**. Save.
+4. **Its consumer key.** The app → Settings → OAuth Settings → **Consumer Key and Secret** (Salesforce emails you a
+   code). Copy the key; the secret isn't needed.
+5. **The repo's settings** (below): `SF_JWT_KEY` (all of `server.key`), `SF_CLIENT_ID` (the consumer key),
+   `SF_USERNAME`, `SF_LOGIN_URL`, `CERT_EXPIRES`. Then delete `server.key` and `server.crt`: the repo is the only
+   place the key needs to be. If it's lost, make a new pair and upload the new certificate.
 
-   **About the key.** GitHub's runners have no fixed IP address, so the app relaxes the org's IP restrictions; the
-   certificate is what keeps others out. The app is pre-authorized for a whole profile, so anyone with the private
-   key can sign in, from anywhere, as **any user with that profile**: give the backup user a profile of its own
-   (below) rather than System Administrator. Keep the key only in the repo's secrets and your password manager. If it leaks, delete the certificate from the
-   connected app (or the app) at once, then make a new key (below).
-3. **Turn the email on** if you want it: `EMAIL` and `MAIL_TO` (below). Salesforce sends it, so the org's email
-   deliverability must allow it: sandboxes start at *System email only*, which blocks it.
-4. **Run it once:** Actions → Metadata backup → Run workflow. The first run commits everything. A new connected app
-   can take a few minutes before it accepts sign-ins.
+### By script
+
+On a computer with the Salesforce CLI signed in to the org, `openssl`, Python, and optionally the GitHub CLI:
+
+```
+setup/setup.sh <org alias> "<backup user's profile>" <owner/repo>
+```
+
+It does the same steps: makes the key, deploys the app **Metadata Backup** with the settings above, reads back its
+consumer key (or asks you to paste it from Setup), sets the repo's secrets and `SF_*` and `CERT_EXPIRES` variables,
+and deletes the key. Without the GitHub CLI it prints them for you to enter. Read it first: it deploys to your org.
+
+### About the app and the key
+
+- **Why not a connected app:** since Spring '26, new connected apps can't be created without asking Salesforce
+  Support. Existing ones keep working; an existing connected app with the same settings works the same.
+- **The key reaches the whole profile.** The app is pre-authorized for a profile, so anyone with the private key
+  can sign in, from anywhere, as **any user with that profile**: give the backup user a profile of its own (below)
+  rather than System Administrator. GitHub's runners have no fixed IP address, so the app relaxes the org's IP
+  restrictions; the certificate is what keeps others out. If the key leaks, disable the app at once, then make a new
+  key (below).
+- **Don't give the backup user *View External Client Apps Consumer Secrets in Metadata*,** and leave the org's
+  setting that exposes apps' consumer secrets to the Metadata API off. The backup would then hold them.
+- **Sandboxes:** a refreshed sandbox doesn't keep local External Client Apps. Set it up again after a refresh.
 
 ## Settings
 
@@ -92,8 +120,8 @@ Settings → Secrets and variables → Actions.
 
 | Kind | Name | What |
 |---|---|---|
-| Secret | `SF_JWT_KEY` | The private key matching the connected app's certificate |
-| Secret | `SF_CLIENT_ID` | The connected app's consumer key |
+| Secret | `SF_JWT_KEY` | The private key matching the app's certificate |
+| Secret | `SF_CLIENT_ID` | The app's consumer key |
 | Variable | `SF_USERNAME` | The Salesforce user it signs in as |
 | Variable | `SF_LOGIN_URL` | `https://login.salesforce.com` (default), or `https://test.salesforce.com` for a sandbox |
 | Variable | `ORG_LABEL` | The org's name in the email |
@@ -101,12 +129,23 @@ Settings → Secrets and variables → Actions.
 | Variable | `MAIL_TO` | Who gets the email; commas for more than one, up to 5 |
 | Variable | `MAIL_FROM` | With `EMAIL` `org`: the organization-wide address it's sent from, verified in Setup → Organization-Wide Addresses (a no-reply works) |
 | Variable | `COMMIT_NAME`, `COMMIT_EMAIL` | Who the nightly commits are by (default: GitHub Actions) |
-| Variable | `EXCLUDED_METADATA` | Types to leave out, spaces between (default `CleanDataService`). Setting it replaces the default: to skip reports and dashboards too, `CleanDataService Report Dashboard` |
+| Variable | `REPORTS` | `on` (default) or `off`. Off leaves out reports and dashboards, which users change daily; report types stay |
 | Variable | `INCLUDE_PACKAGES` | `managed`, `unlocked` or both, to back up installed packages' parts too (default: neither, and profiles lack those packages' permissions) |
 | Variable | `ALERT_DELETED_PERCENT` | A night that deletes more than this share of the backup, or of one type (10 files or more), or the last of a type, says WARNING in the email and on the run's page (default 20; `off` for never) |
 | Variable | `BLOCK_DELETED_PERCENT` | A night that would delete more than this share isn't committed, and the run fails (default 50; `off` for never). Set it to `off` for one run if the org really lost that much |
 | Variable | `CERT_EXPIRES` | The sign-in certificate's expiry date, `YYYY-MM-DD`. From 30 days before, the email and the run's page say to make a new one (default: blank, no check) |
+
+GitHub won't save a blank variable: to turn a setting off, set it to `off`.
+
+**Advanced**
+
+| Kind | Name | What |
+|---|---|---|
+| Variable | `EXCLUDED_METADATA` | More types to leave out, by Metadata API name, spaces between, e.g. `EmailTemplate Document`. Added to the defaults (`CleanDataService`, and reports and dashboards with `REPORTS` `off`). |
 | Variable | `BATCH_LIMIT` | Files per pull (default 9,000) |
+
+Leaving a type out later deletes its files from the backup on the next run, which can trip `BLOCK_DELETED_PERCENT`:
+set it to `off` for that run.
 
 The schedule is the `cron` line at the top of `.github/workflows/backup.yml`: 11:00 UTC every day. The Salesforce
 CLI version is pinned in the same file (`@salesforce/cli@2.156.5`); raise it now and then, and run the workflow by
@@ -127,7 +166,7 @@ file's history on GitHub.
 
 ## Renewing the key
 
-The certificate lasts 3 years. Put its expiry date in `CERT_EXPIRES` and the email reminds you 30 days ahead; the
-date is `openssl x509 -enddate -noout -in server.crt`. Before it runs out, delete `setup/out/`, run `setup/setup.sh`
-again (it updates the same connected app), and the new key goes into the repo's secrets. Then update
-`CERT_EXPIRES`.
+The certificate lasts 3 years; with `CERT_EXPIRES` set, the email reminds you 30 days ahead. Before it runs out,
+run `setup/setup.sh` again (it updates the same app, the new key goes into the repo's secrets, and `CERT_EXPIRES` is
+reset), or by hand: make a new pair, upload the new `server.crt` on the app (Settings → OAuth Settings → Edit), and
+update `SF_JWT_KEY` and `CERT_EXPIRES`.
