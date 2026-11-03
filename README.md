@@ -33,6 +33,9 @@ org's first run can take an hour, and later ones a fraction of that.
   templates, documents and letterheads, which nothing else lists, are split off. They're what grows.
 - **Noise.** `CleanDataService` (the built-in geocoding rules) comes back in a different order every pull, so it's
   left out by default; otherwise every night would show one file changed.
+- **Blips.** Listing the org sends hundreds of calls at once, and one blip fails it, so it's tried 3 times, a minute
+  apart. Nothing else is retried: the CLI already rides out network errors while a pull runs, and tomorrow's run is
+  the retry for the rest.
 - **A bad night.** Failed pulls, and types that fail to list (the CLI leaves those out without a word), stop the
   run before anything is committed. An item the org listed but didn't hand over is kept as it was, not recorded as
   deleted. What raises no error is the backup user losing access: Salesforce just shows it less, and the backup

@@ -68,10 +68,17 @@ jobs:
           args=(--from-org org --name package --output-dir manifest)
           for t in $excluded; do args+=(--excluded-metadata "$t"); done
           for p in $INCLUDE_PACKAGES; do args+=(--include-packages "$p"); done
-          since=$(date +%s%3N)
           # A type that fails to list is left out without a word, except in the debug log: check it.
-          SF_LOG_LEVEL=debug sf project generate manifest "${args[@]}"
-          python3 .github/scripts/check_listing.py "$since"
+          # The listing sends hundreds of calls at once and one blip fails it, so try it 3 times, a minute apart.
+          for attempt in 1 2 3; do
+            since=$(date +%s%3N)
+            if SF_LOG_LEVEL=debug sf project generate manifest "${args[@]}"                 && python3 .github/scripts/check_listing.py "$since"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then echo "Listing failed 3 times: stopping."; exit 1; fi
+            echo "Listing attempt $attempt failed (reason above); trying again in 60 seconds."
+            sleep 60
+          done
 
       - name: Pull it
         env:
