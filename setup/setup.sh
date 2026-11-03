@@ -3,16 +3,18 @@
 # GitHub CLI) fills in this repo's secrets and variables. Run it from the repo, signed in to the org with the
 # Salesforce CLI:
 #
-#   setup/setup.sh <org alias> "<backup user's profile>" [owner/repo]
-#   setup/setup.sh myorg "Metadata Backup" me/acme-metadata-backup
+#   setup/setup.sh <org alias> <backup user's username> [owner/repo]
+#   setup/setup.sh myorg backup@acme.com me/acme-metadata-backup
 #
+# The backup user can be you; the app is pre-authorized for that user's profile, so a profile of its own is safer.
 # Needs sf, openssl and Python; gh (signed in) to set the repo's settings, otherwise it prints them for you to enter.
 # The key is made in setup/out/ (gitignored) and deleted once the repo has it.
 # APP_NAME sets the app's API name (default Metadata_Backup); SF_CLIENT_ID skips the question for its consumer key.
 set -euo pipefail
 
-org=${1:?usage: setup.sh <org alias> "<profile>" [owner/repo]}
-profile=${2:?usage: setup.sh <org alias> "<profile>" [owner/repo]}
+usage='usage: setup.sh <org alias> <backup username> [owner/repo]'
+org=${1:?$usage}
+username=${2:?$usage}
 repo=${3:-}
 app=${APP_NAME:-Metadata_Backup}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -22,26 +24,42 @@ mkdir -p "$out"
 py=python3; $py -c 1 2>/dev/null || py=python
 command -v "$py" > /dev/null || { echo "Needs Python (python3 or python)." >&2; exit 1; }
 command -v openssl > /dev/null || { echo "Needs openssl, to make the key." >&2; exit 1; }
-json_field() { $py -c "import json,sys; print(json.load(sys.stdin)['result']['$1'])"; }
-case "$profile" in *,*) echo "The profile's name can't contain a comma." >&2; exit 1 ;; esac
+# The first record's fields, tab-separated (blank if none): query "<SOQL>" Field Field.Sub...
+query() {
+  local soql=$1; shift
+  sf data query -o "$org" -q "$soql" --json | $py -c "
+import json, sys
+recs = json.load(sys.stdin)['result']['records']
+def get(r, path):
+    for p in path.split('.'):
+        r = (r or {}).get(p)
+    return '' if r is None else str(r)
+print('\t'.join(get(recs[0], f) for f in sys.argv[1:]) if recs else '')" "$@"
+}
 
-display=$(sf org display -o "$org" --json)
-username=$(json_field username <<< "$display")
-instance=$(json_field instanceUrl <<< "$display")
-case "$instance" in
-  *sandbox*|*.scratch.*|*://cs[0-9]*|*.cs[0-9]*) login_url=https://test.salesforce.com ;;
-  *) login_url=https://login.salesforce.com ;;
-esac
-email=$(sf data query -o "$org" -q "SELECT Email FROM User WHERE Username = '$username'" --json \
-  | $py -c "import json,sys; print(json.load(sys.stdin)['result']['records'][0]['Email'])")
-echo "Org: $username ($instance)"
+instance=$($py -c "import json,sys; print(json.load(sys.stdin)['result']['instanceUrl'])" \
+  <<< "$(sf org display -o "$org" --json)")
+case "$username" in *\'*|*\\*) echo "That username has a quote or backslash in it." >&2; exit 1 ;; esac
+IFS=$'\t' read -r profile email active <<< "$(query "SELECT Profile.Name, Email, IsActive FROM User WHERE Username = '$username'" Profile.Name Email IsActive)"
+[ -n "$profile" ] || { echo "No user $username in this org." >&2; exit 1; }
+[ "$active" = True ] || echo "Note: $username isn't active; it can't sign in until it is."
+case "$profile" in *,*) echo "The backup user's profile ($profile) has a comma in its name; the app can't name it." >&2; exit 1 ;; esac
+if [ "$(query "SELECT IsSandbox FROM Organization" IsSandbox)" = True ]; then
+  login_url=https://test.salesforce.com
+else
+  login_url=https://login.salesforce.com
+fi
+echo "Org: $instance. Backup user: $username (profile $profile)."
 
-if [ ! -f "$out/server.key" ]; then
+if [ -f "$out/server.key" ]; then
+  echo "Reusing the key in $out (delete that folder for a new one)."
+else
   # MSYS2_ARG_CONV_EXCL: on Git Bash for Windows, stops "/CN=..." being turned into a file path.
   MSYS2_ARG_CONV_EXCL="/CN" openssl req -x509 -newkey rsa:2048 -nodes -days 1095 \
     -keyout "$out/server.key" -out "$out/server.crt" -subj "/CN=salesforce-metadata-backup"
   echo "Made a key and a certificate (good for 3 years): $out"
 fi
+[ -f "$out/server.crt" ] || { echo "$out has a key but no server.crt: delete the folder and run again." >&2; exit 1; }
 cert_expires=$(openssl x509 -enddate -noout -in "$out/server.crt" | $py -c \
   "import sys,datetime; s=sys.stdin.read().split('=',1)[1].strip(); print(datetime.datetime.strptime(' '.join(s.split()), '%b %d %H:%M:%S %Y %Z').date())")
 

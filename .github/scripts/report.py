@@ -22,7 +22,23 @@ from collections import defaultdict
 PREFIX = "force-app/main/default/"
 KIND = {"A": "added", "M": "changed", "D": "deleted", "R": "renamed", "C": "copied", "T": "changed"}
 MAX_LISTED = 300
-API = "v64.0"
+
+
+def api_version(env):
+    """The org's newest API version, as tonight's list was made with; the CLI's choice if there's no list."""
+    try:
+        import xml.etree.ElementTree as ET
+        v = ET.parse("manifest/package.xml").getroot().findtext("{http://soap.sforce.com/2006/04/metadata}version")
+        if v:
+            return v
+    except (OSError, ET.ParseError):
+        pass
+    out = subprocess.run([shutil.which("sf") or "sf", "org", "display", "--target-org", env.get("SF_ALIAS") or "org",
+                          "--json"], capture_output=True, text=True)
+    try:
+        return json.loads(out.stdout)["result"]["apiVersion"]
+    except (ValueError, KeyError, TypeError):
+        return "64.0"
 
 
 def read_changes(path):
@@ -94,7 +110,12 @@ def build_report(env, rows, warnings, batches):
     if env.get("JOB_STATUS") != "success":
         if env.get("BLOCKED") == "true":
             why = (f"Not committed: {deleted:,} of {had:,} files would have been deleted, over"
-                   f" BLOCK_DELETED_PERCENT ({env.get('BLOCK_DELETED_PERCENT')}). Usually the backup user lost access.")
+                   f" BLOCK_DELETED_PERCENT ({env.get('BLOCK_DELETED_PERCENT')}). Usually the backup user lost access;"
+                   " once it's fixed, the next run carries on. If the org really lost that much, set"
+                   " BLOCK_DELETED_PERCENT to off for one run.")
+            types = env.get("ALERT_TYPES") or ""
+            if types:
+                why += f" By type: {types}."
             return (f"{org} metadata backup BLOCKED: {deleted:,} files would be deleted",
                     f'<p>{html.escape(why)} <a href="{run_url}">The run</a>.</p>', f"**{why}**")
         return (f"{org} metadata backup FAILED",
@@ -154,7 +175,7 @@ def send_by_salesforce(env, mode, subject, body):
         json.dump({"inputs": [inputs]}, f)
     try:
         out = subprocess.run([shutil.which("sf") or "sf", "api", "request", "rest",
-                              f"services/data/{API}/actions/standard/emailSimple", "--method", "POST",
+                              f"services/data/v{api_version(env)}/actions/standard/emailSimple", "--method", "POST",
                               "--body", "@" + f.name, "--target-org", env.get("SF_ALIAS") or "org"],
                              capture_output=True, text=True)
     finally:
@@ -187,7 +208,9 @@ def main():
     if mode == "off":
         print(f"{subject} (EMAIL is off)")
         return
-    if env.get("JOB_STATUS") != "success":
+    # A failed run sends nothing of its own (GitHub emails you), except a blocked one: the org was reachable, and
+    # lost access, the usual cause, deserves its own email.
+    if env.get("JOB_STATUS") != "success" and env.get("BLOCKED") != "true":
         print(f"{subject} (no email: GitHub emails you when a run fails)")
         return
     send_by_salesforce(env, mode, subject, body)

@@ -1,6 +1,12 @@
 .sf/
 .sfdx/
-*.key
-setup/out/
 __pycache__/
-*.crt
+# The setup key: never in the repo.
+/setup/out/
+/*.key
+
+# App credentials and certificates: never in a backup. Edit these lines to back them up anyway.
+force-app/**/*.crt
+force-app/**/*.crt-meta.xml
+force-app/**/*.connectedApp-meta.xml
+force-app/**/*.ecaGlblOauth-meta.xml

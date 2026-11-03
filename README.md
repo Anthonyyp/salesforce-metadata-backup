@@ -5,11 +5,12 @@ Apex class, profile, permission set and setting, as Salesforce source, with a co
 changed and an email saying what. Setup only, not records.
 
 > **Keep your copy private.** This template is public; the repo you make from it holds your org's whole setup,
-> and that can include secrets: an API key someone put in a custom metadata record or a custom setting, for one.
-> Use this template lets you pick Public: don't.
+> and that can include secrets: an API key someone put in a custom metadata record, for one. Use this template
+> lets you pick Public: don't.
 
-Free on GitHub's free plan: private repos get 2,000 Action minutes a month. A small org's run takes 3 to 5; a big
-org's first run can take an hour, and later ones a fraction of that.
+Free on GitHub's free plan: private repos get 2,000 Action minutes a month. A small org's run takes 3 to 5. Every
+night pulls the whole org, so a big org's run takes about as long every night as on the first, up to an hour: about
+all of the free minutes. To cut it, set `REPORTS` to `off`, or leave out more types (`EXCLUDED_METADATA`).
 
 ## What it does each night
 
@@ -24,6 +25,8 @@ org's first run can take an hour, and later ones a fraction of that.
    When a run fails, GitHub emails you on its own (if your Actions notifications are on). That goes to the account
    that last edited the workflow's schedule, not to `MAIL_TO`. For a repo in an organization, Settings →
    Notifications → Custom routing sets which of that account's addresses it uses.
+6. **Keeps the run's raw files** for 14 days on the run's page (Artifacts): Salesforce's answer to each pull, the
+   listing lines of the CLI's log, and the list of changes. For looking into a bad night.
 
 ### What it handles that a plain retrieve doesn't
 
@@ -31,6 +34,9 @@ org's first run can take an hour, and later ones a fraction of that.
   everything profiles, permission sets and translations depend on in one batch: a profile pulled without the
   objects, fields and classes it covers comes back without those permissions. Only reports, dashboards, email
   templates, documents and letterheads, which nothing else lists, are split off. They're what grows.
+- **The size limit.** A pull also stops at 39 MB zipped, so static resources and content assets, which can be
+  megabytes each, go 10 to a batch. If batch 1 is still too big (its pull fails on size), leave types out with
+  `EXCLUDED_METADATA`.
 - **Noise.** `CleanDataService` (the built-in geocoding rules) comes back in a different order every pull, so it's
   left out by default; otherwise every night would show one file changed.
 - **Blips.** Listing the org sends hundreds of calls at once, and one blip fails it, so it's tried 3 times, a minute
@@ -41,12 +47,17 @@ org's first run can take an hour, and later ones a fraction of that.
   deleted. What raises no error is the backup user losing access: Salesforce just shows it less, and the backup
   records the rest as deleted. So a night that deletes more than a fifth of the backup (`ALERT_DELETED_PERCENT`),
   or of one type with 10 files or more, or the last of any type, says WARNING in the email's subject and on the
-  run's page. One that would delete more than half (`BLOCK_DELETED_PERCENT`) isn't committed. Once access is fixed,
-  the next run puts the files back. With email off, warnings show only on the run's page.
+  run's page. One that would delete more than half (`BLOCK_DELETED_PERCENT`) isn't committed, and with email on
+  Salesforce emails that too. Once access is fixed, the next run puts the files back. With email off, warnings
+  show only on the run's page.
 - **New metadata.** The project has no API version, so the CLI uses the org's newest, and whatever Salesforce adds
   in a release is listed and backed up. The night after a release can show many files changed. For quiet release
   nights instead, pin one: `"sourceApiVersion": "66.0"` in `sfdx-project.json`. Then nothing newer is backed up
   until you raise it.
+
+App credentials and certificates are never committed: `.gitignore` leaves out certificates, connected apps and
+External Client Apps' OAuth settings, which hold consumer keys (and secrets, in an org that exposes them). Edit
+`.gitignore` to back them up anyway.
 
 Installed packages' parts are left out by default (they're the vendor's). Profiles and permission sets then come back
 without their permissions on those packages' objects, fields and classes. Set `INCLUDE_PACKAGES` to `managed` for
@@ -97,10 +108,11 @@ has it on Windows).
 On a computer with the Salesforce CLI signed in to the org, `openssl`, Python, and optionally the GitHub CLI:
 
 ```
-setup/setup.sh <org alias> "<backup user's profile>" <owner/repo>
+setup/setup.sh <org alias> <backup user's username> <owner/repo>
 ```
 
-It does the same steps: makes the key, deploys the app **Metadata Backup** with the settings above, reads back its
+The backup user can be you. It does the same steps: makes the key, deploys the app **Metadata Backup**,
+pre-authorized for the backup user's profile, with the settings above, reads back its
 consumer key (or asks you to paste it from Setup), sets the repo's secrets and `SF_*` and `CERT_EXPIRES` variables,
 and deletes the key. Without the GitHub CLI it prints them for you to enter. Read it first: it deploys to your org.
 
@@ -135,7 +147,7 @@ Settings → Secrets and variables → Actions.
 | Variable | `REPORTS` | `on` (default) or `off`. Off leaves out reports and dashboards, which users change daily; report types stay |
 | Variable | `INCLUDE_PACKAGES` | `managed`, `unlocked` or both, to back up installed packages' parts too (default: neither, and profiles lack those packages' permissions) |
 | Variable | `ALERT_DELETED_PERCENT` | A night that deletes more than this share of the backup, or of one type (10 files or more), or the last of a type, says WARNING in the email and on the run's page (default 20; `off` for never) |
-| Variable | `BLOCK_DELETED_PERCENT` | A night that would delete more than this share isn't committed, and the run fails (default 50; `off` for never). Set it to `off` for one run if the org really lost that much |
+| Variable | `BLOCK_DELETED_PERCENT` | A night that would delete more than this share isn't committed, the run fails, and the email says why (default 50; `off` for never). Set it to `off` for one run if the org really lost that much |
 | Variable | `CERT_EXPIRES` | The sign-in certificate's expiry date, `YYYY-MM-DD`. From 30 days before, the email and the run's page say to make a new one (default: blank, no check) |
 
 GitHub won't save a blank variable: to turn a setting off, set it to `off`.

@@ -45,7 +45,8 @@ jobs:
             --username "$SF_USERNAME" \
             --instance-url "$SF_LOGIN_URL" \
             --alias org
-          rm "$RUNNER_TEMP/server.key"
+          # The key file stays: the CLI signs in again with it if the session runs out on a long night. The runner
+          # is wiped when the job ends.
 
       - name: List everything in the org
         env:
@@ -162,3 +163,22 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: python3 .github/scripts/report.py "$RUNNER_TEMP/changes.txt" "$RUNNER_TEMP/retrieve"
+
+      - name: Keep the run's raw files
+        # Salesforce's answer to each pull, the listing lines of the CLI's log, and the list of changes, for 14 days
+        # on the run's page (Artifacts). For looking into a bad night; nothing secret is in them.
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/run-files"
+          cp -r "$RUNNER_TEMP/retrieve" "$RUNNER_TEMP/run-files/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/changes.txt" "$RUNNER_TEMP/run-files/" 2>/dev/null || true
+          # Only the listing lines, and anything shaped like a Salesforce session id blanked, to be safe.
+          cat ~/.sf/sf-*.log 2>/dev/null | grep ConnectionResolver \
+            | sed -E 's/00D[A-Za-z0-9]{12,15}![A-Za-z0-9._]+/[session id]/g' > "$RUNNER_TEMP/run-files/listing.log" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: run-files
+          path: ${{ runner.temp }}/run-files
+          retention-days: 14
+          if-no-files-found: ignore
