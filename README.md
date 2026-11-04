@@ -82,28 +82,35 @@ has it on Windows).
 1. **The key and certificate**, in a folder outside the repo:
 
    ```
-   openssl req -x509 -newkey rsa:2048 -nodes -days 1095 -keyout server.key -out server.crt -subj "/CN=metadata-backup"
+   MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 1095 -keyout server.key -out server.crt -subj "/CN=metadata-backup"
    openssl x509 -enddate -noout -in server.crt
    ```
 
-   The second line prints the expiry date, for `CERT_EXPIRES`.
-2. **The permission set.** Setup → Permission Sets → New: Label `GitHub Metadata Backup`. System Permissions: **API Only
-   User** and **Password Never Expires** (neither if the backup user is you). Assign it to the backup user, and to no
-   one else.
-3. **The app.** Setup → App Manager → the arrow next to New App → **New External Client App**.
-   - External Client App Name `GitHub Metadata Backup`; Contact Email yours; Distribution State **Local**.
-   - **Enable OAuth.** Callback URL `http://localhost:1717/OauthRedirect`. Selected OAuth Scopes: *Manage user data
-     via APIs (api)* and *Perform requests at any time (refresh_token, offline_access)*. JWT sign-in refuses an app
-     without `refresh_token` ("refresh_token scope is required"), though it never uses one.
-   - **Enable JWT Bearer Flow**, and upload `server.crt`. Leave *Issue JSON Web Token (JWT)-based access tokens*
-     off: the Metadata API refuses those tokens.
+   `MSYS_NO_PATHCONV=1` stops Git Bash on Windows turning `/CN=...` into a file path; it does nothing elsewhere. The
+   second line prints the expiry, e.g. `notAfter=Nov 3 13:28:34 2029 GMT`: that's `2029-11-03` for `CERT_EXPIRES`.
+2. **The permission set.** Setup → Permission Sets → New.
+   - Label `GitHub Metadata Backup`; License `--None--`; Description
+     `The metadata backup's user only. Holders can sign in with the backup's key.` (setup.sh knows its own set by
+     this description, so it can take over later).
+   - For a user of its own: System Permissions → Edit, tick **API Only User** and **Password Never Expires**. Neither
+     if the backup user is you.
+   - Manage Assignments → Add Assignment → the backup user → Next → No expiration date → Assign. No one else.
+3. **The app.** Setup → App Manager → New App → **New External Client App**.
+   - External Client App Name `GitHub Metadata Backup`; Contact Email yours; Distribution State **Local**; Description
+     `Signs the nightly GitHub Actions metadata backup in, by JWT. Retrieves only.`
+   - Expand **API (Enable OAuth Settings)** and tick **Enable OAuth**. Callback URL
+     `http://localhost:1717/OauthRedirect`. OAuth Scopes: move *Manage user data via APIs (api)* and *Perform
+     requests at any time (refresh_token, offline_access)* to Selected. JWT sign-in refuses an app without
+     `refresh_token` ("refresh_token scope is required"), though it never uses one.
+   - Tick **Enable JWT Bearer Flow**, and upload `server.crt`. Leave *Issue JSON Web Token (JWT)-based access tokens
+     for named users* off: the Metadata API refuses those tokens. Leave the rest as it is.
    - Create.
 4. **Its policies.** The app → Policies → Edit.
-   - App Policies: move **GitHub Metadata Backup** to **Selected Permission Sets**.
-   - OAuth Policies: Permitted Users **Admin approved users are pre-authorized**; IP Relaxation **Relax IP
-     restrictions**. Save.
-5. **Its consumer key.** The app → Settings → OAuth Settings → **Consumer Key and Secret** (Salesforce emails you a
-   code). Copy the key; the secret isn't needed.
+   - OAuth Policies first: Permitted Users **Admin approved users are pre-authorized** (OK the warning); IP
+     Relaxation **Relax IP restrictions**.
+   - That shows **Select Permission Sets** under App Policies: move **GitHub Metadata Backup** to Selected. Save.
+5. **Its consumer key.** The app → Settings → OAuth Settings → **Consumer Key and Secret**. It opens in a new tab, and
+   Salesforce emails you a code. Copy the key; the secret isn't needed.
 6. **The repo's settings** (below): `SF_JWT_KEY` (all of `server.key`), `SF_CLIENT_ID` (the consumer key),
    `SF_USERNAME`, `SF_LOGIN_URL`, `CERT_EXPIRES`. Then delete `server.key` and `server.crt`: the repo is the only
    place the key needs to be. If it's lost, make a new pair and upload the new certificate.
