@@ -14,8 +14,9 @@ concurrency: backup
 
 jobs:
   backup:
-    # Skipped until the repo is set up, so the template itself (and a fresh copy) doesn't fail every night.
-    if: ${{ vars.SF_USERNAME != '' }}
+    # Skipped until the repo is set up, so the template itself (and a fresh copy) doesn't fail every night. The
+    # nightly also waits for ENABLED to be on; Run workflow doesn't, so it can be tried first.
+    if: ${{ vars.SF_USERNAME != '' && (github.event_name != 'schedule' || vars.ENABLED == 'on') }}
     runs-on: ubuntu-latest
     # A big org's first run can take an hour or more; minutes are only used as they're spent.
     timeout-minutes: 120
