@@ -6,12 +6,13 @@
 // found"). Most are built-in items that were never in the backup. But one that is in the backup was listed by the
 // org tonight, so it hasn't been deleted: leave its files as they were instead of committing them as deleted.
 // Uses the Salesforce CLI's own library to tell which files belong to which item. Prints the number kept.
-const { execFileSync, execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const root = execSync('npm root --global', { encoding: 'utf8' }).trim();
-const { ComponentSet } = require(path.join(root, '@salesforce/cli/node_modules/@salesforce/source-deploy-retrieve'));
+// SF_CLI_MODULES: the folder the workflow installed the CLI into. Found the way the CLI itself would find it.
+const cli = path.join(process.env.SF_CLI_MODULES, '@salesforce/cli');
+const { ComponentSet } = require(require.resolve('@salesforce/source-deploy-retrieve', { paths: [cli] }));
 
 const folder = process.argv[2];
 const notDelivered = new Set();

@@ -169,9 +169,13 @@ GitHub won't save a blank variable: to turn a setting off, set it to `off`.
 Leaving a type out later deletes its files from the backup on the next run, which can trip `BLOCK_DELETED_PERCENT`:
 set it to `off` for that run.
 
-The schedule is the `cron` line at the top of `.github/workflows/backup.yml`: 11:00 UTC every day. The Salesforce
-CLI version is pinned in the same file (`@salesforce/cli@2.156.5`); raise it now and then, and run the workflow by
-hand once after.
+The schedule is the `cron` line at the top of `.github/workflows/backup.yml`: 11:00 UTC every day.
+
+The Salesforce CLI and its dependencies are locked in `.github/sf-cli`. To raise it: change the version in
+`package.json`, run `npm install --package-lock-only` in that folder, commit both files, and run the workflow by hand
+once. The workflow's actions are pinned to commits; to raise one, swap in the commit of its newer release.
+
+The workflow stops before signing in if the repo is public.
 
 ## The backup user
 

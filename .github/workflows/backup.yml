@@ -20,15 +20,33 @@ jobs:
     # A big org's first run can take an hour or more; minutes are only used as they're spent.
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v5
+      - name: Refuse a public repo
+        # The backup is the org's metadata: in a public repo, anyone could read it. Checked before signing in.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          visibility=$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)
+          case "$visibility" in
+            private|internal) ;;
+            *) echo "::error::This repo is $visibility, and the backup would publish the org's metadata. Make it private (Settings > General > Change visibility), then run again."
+               exit 1 ;;
+          esac
 
-      - uses: actions/setup-node@v5
+      # Actions are pinned to a commit, not a tag: a tag can be moved to other code. The comment is the version.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
 
       - name: Install the Salesforce CLI
-        # Pinned, so a new CLI release can't change a night's run unannounced. Raise it by hand now and then.
-        run: npm install --global @salesforce/cli@2.156.5
+        # The version and every dependency are locked in .github/sf-cli, so a new release can't change a night's run.
+        # Installed outside the repo, so it's never committed; no install scripts run.
+        run: |
+          cp .github/sf-cli/package.json .github/sf-cli/package-lock.json "$RUNNER_TEMP/"
+          npm ci --prefix "$RUNNER_TEMP" --ignore-scripts --no-audit --no-fund
+          echo "$RUNNER_TEMP/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "SF_CLI_MODULES=$RUNNER_TEMP/node_modules" >> "$GITHUB_ENV"
 
       - name: Sign in to Salesforce
         # Settings reach the shell as environment variables, never pasted into the script.
@@ -175,7 +193,7 @@ jobs:
           # Only the listing lines, and anything shaped like a Salesforce session id blanked, to be safe.
           cat ~/.sf/sf-*.log 2>/dev/null | grep ConnectionResolver \
             | sed -E 's/00D[A-Za-z0-9]{12,15}![A-Za-z0-9._]+/[session id]/g' > "$RUNNER_TEMP/run-files/listing.log" || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: run-files

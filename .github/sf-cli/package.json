@@ -1,0 +1,8 @@
+{
+  "name": "sf-cli",
+  "private": true,
+  "description": "The Salesforce CLI the backup runs, with every dependency locked in package-lock.json.",
+  "dependencies": {
+    "@salesforce/cli": "2.156.5"
+  }
+}
