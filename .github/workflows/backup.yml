@@ -4,7 +4,7 @@ name: Metadata backup
 
 on:
   schedule:
-    - cron: "0 11 * * *"   # 11:00 UTC every day; change it here
+    - cron: "0 6 * * *"    # 06:00 UTC: 1 am Eastern in winter, 2 am in summer. Change it here
   workflow_dispatch:        # the Run workflow button on the Actions tab
 
 permissions:
