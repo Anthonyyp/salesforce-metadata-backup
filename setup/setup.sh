@@ -6,7 +6,8 @@
 #   setup/setup.sh <org alias> <backup user's username> [owner/repo]
 #   setup/setup.sh myorg backup@acme.com me/acme-metadata-backup
 #
-# The backup user can be you; the app is pre-authorized for that user's profile, so a profile of its own is safer.
+# The backup user: a user of its own on System Administrator (README). This gives it the Metadata Backup permission set
+# (API Only User, Password Never Expires), and the app lets in only users holding that set.
 # Needs sf, openssl and Python; gh (signed in) to set the repo's settings, otherwise it prints them for you to enter.
 # The key is made in setup/out/ (gitignored) and deleted once the repo has it.
 # APP_NAME sets the app's API name (default Metadata_Backup); SF_CLIENT_ID skips the question for its consumer key.
@@ -43,7 +44,12 @@ case "$username" in *\'*|*\\*) echo "That username has a quote or backslash in i
 IFS=$'\t' read -r profile email active <<< "$(query "SELECT Profile.Name, Email, IsActive FROM User WHERE Username = '$username'" Profile.Name Email IsActive)"
 [ -n "$profile" ] || { echo "No user $username in this org." >&2; exit 1; }
 [ "$active" = True ] || echo "Note: $username isn't active; it can't sign in until it is."
-case "$profile" in *,*) echo "The backup user's profile ($profile) has a comma in its name; the app can't name it." >&2; exit 1 ;; esac
+me=$($py -c "import json,sys; print(json.load(sys.stdin)['result']['username'])" <<< "$(sf org display -o "$org" --json)")
+if [ "$(printf '%s' "$me" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$username" | tr 'A-Z' 'a-z')" ]; then
+  echo "The backup user is you ($me): API Only User would lock you out of Salesforce's screens. Use a user of its own." >&2
+  exit 1
+fi
+[ "$profile" = "System Administrator" ] || echo "Note: $username is on $profile; the README recommends System Administrator."
 if [ "$(query "SELECT IsSandbox FROM Organization" IsSandbox)" = True ]; then
   login_url=https://test.salesforce.com
 else
@@ -67,11 +73,22 @@ cert_expires=$(openssl x509 -enddate -noout -in "$out/server.crt" | $py -c \
 # new connected apps can't be created any more (Salesforce, Spring '26).
 proj=$(mktemp -d)
 d="$proj/force-app/main/default"
-mkdir -p "$d/externalClientApps" "$d/extlClntAppOauthSettings" "$d/extlClntAppGlobalOauthSets" \
+mkdir -p "$d/permissionsets" "$d/externalClientApps" "$d/extlClntAppOauthSettings" "$d/extlClntAppGlobalOauthSets" \
   "$d/extlClntAppOauthPolicies" "$d/extlClntAppPolicies"
 echo '{"packageDirectories":[{"path":"force-app","default":true}]}' > "$proj/sfdx-project.json"
 x() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 ns='xmlns="http://soap.sforce.com/2006/04/metadata"'
+# Only holders of this set can sign in through the app; API Only User keeps the backup user out of the screens.
+cat > "$d/permissionsets/Metadata_Backup.permissionset-meta.xml" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet $ns>
+    <description>The metadata backup's user only. Holders can sign in with the backup's key.</description>
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>Metadata Backup</label>
+    <userPermissions><enabled>true</enabled><name>ApiUserOnly</name></userPermissions>
+    <userPermissions><enabled>true</enabled><name>PasswordNeverExpires</name></userPermissions>
+</PermissionSet>
+EOF
 cat > "$d/externalClientApps/$app.eca-meta.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <ExternalClientApplication $ns>
@@ -98,14 +115,16 @@ cat > "$d/extlClntAppGlobalOauthSets/${app}_glbloauth.ecaGlblOauth-meta.xml" <<E
     <certificate>$(cat "$out/server.crt")</certificate>
     <externalClientApplication>$app</externalClientApplication>
     <isConsumerSecretOptional>true</isConsumerSecretOptional>
-    <isNamedUserJwtEnabled>true</isNamedUserJwtEnabled>
+    <!-- Off: JWT-based access tokens are refused by the Metadata API ("SOAP API does not support JWT-based access
+         tokens"). JWT sign-in works without them. -->
+    <isNamedUserJwtEnabled>false</isNamedUserJwtEnabled>
     <label>${app}_glbloauth</label>
 </ExtlClntAppGlobalOauthSettings>
 EOF
 cat > "$d/extlClntAppOauthPolicies/${app}_oauthPlcy.ecaOauthPlcy-meta.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtlClntAppOauthConfigurablePolicies $ns>
-    <commaSeparatedProfile>$(x "$profile")</commaSeparatedProfile>
+    <commaSeparatedPermissionSet>Metadata_Backup</commaSeparatedPermissionSet>
     <externalClientApplication>$app</externalClientApplication>
     <!-- GitHub's runners have no fixed IP, so the org's IP ranges can't apply; the certificate is the lock. -->
     <ipRelaxationPolicyType>Bypass</ipRelaxationPolicyType>
@@ -124,6 +143,10 @@ cat > "$d/extlClntAppPolicies/${app}_plcy.ecaPlcy-meta.xml" <<EOF
 EOF
 (cd "$proj" && sf project deploy start -o "$org" --source-dir force-app --wait 10 > /dev/null)
 echo "External Client App Metadata Backup ($app) is in the org."
+if [ -z "$(query "SELECT Id FROM PermissionSetAssignment WHERE PermissionSet.Name = 'Metadata_Backup' AND Assignee.Username = '$username'" Id)" ]; then
+  sf org assign permset -o "$org" --name Metadata_Backup --on-behalf-of "$username" > /dev/null
+fi
+echo "Permission set Metadata Backup is assigned to $username."
 
 # The consumer key (not a secret) comes back on a retrieve. If it doesn't, Setup shows it after an email code.
 # Don't turn on the org setting that also hands apps' consumer secrets to metadata retrieves: this backup's too.

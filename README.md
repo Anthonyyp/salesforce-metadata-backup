@@ -69,10 +69,11 @@ Two ways: by hand in Setup, or the setup script. Same result. Either way you nee
 has it on Windows).
 
 1. **Make a repo from this template** (Use this template → Create a new repository). **Private.**
-2. **The sign-in.** By hand or by script, below.
-3. **Turn the email on** if you want it: `EMAIL` and `MAIL_TO` (below). Salesforce sends it, so the org's email
+2. **A backup user:** its own user, on the System Administrator profile ([The backup user](#the-backup-user)).
+3. **The sign-in.** By hand or by script, below.
+4. **Turn the email on** if you want it: `EMAIL` and `MAIL_TO` (below). Salesforce sends it, so the org's email
    deliverability must allow it: sandboxes start at *System email only*, which blocks it.
-4. **Run it once:** Actions → Metadata backup → Run workflow. The first run commits everything. A new app can take a
+5. **Run it once:** Actions → Metadata backup → Run workflow. The first run commits everything. A new app can take a
    few minutes before it accepts sign-ins.
 
 ### By hand
@@ -85,21 +86,23 @@ has it on Windows).
    ```
 
    The second line prints the expiry date, for `CERT_EXPIRES`.
-2. **The app.** Setup → App Manager → the arrow next to New App → **New External Client App**.
+2. **The permission set.** Setup → Permission Sets → New: Label `Metadata Backup`. System Permissions: **API Only
+   User** and **Password Never Expires**. Assign it to the backup user, and to no one else.
+3. **The app.** Setup → App Manager → the arrow next to New App → **New External Client App**.
    - External Client App Name `Metadata Backup`; Contact Email yours; Distribution State **Local**.
    - **Enable OAuth.** Callback URL `http://localhost:1717/OauthRedirect`. Selected OAuth Scopes: *Manage user data
      via APIs (api)* and *Perform requests at any time (refresh_token, offline_access)*. JWT sign-in refuses an app
      without `refresh_token` ("refresh_token scope is required"), though it never uses one.
-   - **Enable JWT Bearer Flow**, and upload `server.crt`.
+   - **Enable JWT Bearer Flow**, and upload `server.crt`. Leave *Issue JSON Web Token (JWT)-based access tokens*
+     off: the Metadata API refuses those tokens.
    - Create.
-3. **Its policies.** The app → Policies → Edit.
-   - App Policies: move the backup user's profile to **Selected Profiles** (or a permission set to Selected
-     Permission Sets).
+4. **Its policies.** The app → Policies → Edit.
+   - App Policies: move **Metadata Backup** to **Selected Permission Sets**.
    - OAuth Policies: Permitted Users **Admin approved users are pre-authorized**; IP Relaxation **Relax IP
      restrictions**. Save.
-4. **Its consumer key.** The app → Settings → OAuth Settings → **Consumer Key and Secret** (Salesforce emails you a
+5. **Its consumer key.** The app → Settings → OAuth Settings → **Consumer Key and Secret** (Salesforce emails you a
    code). Copy the key; the secret isn't needed.
-5. **The repo's settings** (below): `SF_JWT_KEY` (all of `server.key`), `SF_CLIENT_ID` (the consumer key),
+6. **The repo's settings** (below): `SF_JWT_KEY` (all of `server.key`), `SF_CLIENT_ID` (the consumer key),
    `SF_USERNAME`, `SF_LOGIN_URL`, `CERT_EXPIRES`. Then delete `server.key` and `server.crt`: the repo is the only
    place the key needs to be. If it's lost, make a new pair and upload the new certificate.
 
@@ -111,18 +114,16 @@ On a computer with the Salesforce CLI signed in to the org, `openssl`, Python, a
 setup/setup.sh <org alias> <backup user's username> <owner/repo>
 ```
 
-The backup user can be you. It does the same steps: makes the key, deploys the app **Metadata Backup**,
-pre-authorized for the backup user's profile, with the settings above, reads back its
-consumer key (or asks you to paste it from Setup), sets the repo's secrets and `SF_*` and `CERT_EXPIRES` variables,
+It does the same steps: makes the key, deploys the permission set and the app **Metadata Backup**, assigns the
+permission set to the backup user, reads back the app's consumer key (or asks you to paste it from Setup), sets the repo's secrets and `SF_*` and `CERT_EXPIRES` variables,
 and deletes the key. Without the GitHub CLI it prints them for you to enter. Read it first: it deploys to your org.
 
 ### About the app and the key
 
 - **Why not a connected app:** since Spring '26, new connected apps can't be created without asking Salesforce
   Support. Existing ones keep working; an existing connected app with the same settings works the same.
-- **The key reaches the whole profile.** The app is pre-authorized for a profile, so anyone with the private key
-  can sign in, from anywhere, as **any user with that profile**: give the backup user a profile of its own (below)
-  rather than System Administrator. GitHub's runners have no fixed IP address, so the app relaxes the org's IP
+- **The key reaches whoever holds the permission set.** Anyone with the private key can sign in, from anywhere, as
+  any user with **Metadata Backup**: keep it on the backup user alone. GitHub's runners have no fixed IP address, so the app relaxes the org's IP
   restrictions; the certificate is what keeps others out. If the key leaks, disable the app at once, then make a new
   key (below).
 - **Don't give the backup user *View External Client Apps Consumer Secrets in Metadata*,** and leave the org's
@@ -168,10 +169,23 @@ hand once after.
 
 ## The backup user
 
-The user needs API Enabled, View Setup and Configuration, and Modify Metadata Through Metadata API Functions
-(the Metadata API's retrieve needs it, though the backup never deploys anything). An admin works, but the key then
-reaches every admin (above): a dedicated integration user with its own profile is safer. Whatever that user can't see isn't backed up: private dashboards, for example, show in
-the email as items listed but not handed over.
+A user of its own, on the **System Administrator** profile. It costs a full Salesforce license.
+
+- **Why admin:** in testing, View All Data and Modify All Data on a lesser profile still missed objects, flows, auth
+  providers and half of each profile, without an error. A clone of System Administrator may not get the permissions
+  Salesforce adds in later releases, and the gap would be silent too.
+- **What keeps it safe:** the **Metadata Backup** permission set. API Only User keeps it out of Salesforce's screens;
+  Password Never Expires stops an expired password from breaking the sign-in; and the app lets in only users holding it.
+- **Don't use yourself:** API Only User locks an admin out of the screens too. Never assign Metadata Backup to
+  anyone but the backup user.
+- **Other options:** a clone of System Administrator (check it against System Administrator after big releases), or
+  View All Data and Modify All Data on a minimal profile, which misses things. The free Salesforce Integration
+  license can't hold System Administrator.
+- **Feature licenses are per user:** give it the permission set licenses and permission sets your admins have for
+  features such as Data Cloud or Service Cloud, or those features' objects are left out.
+
+Whatever the user can't see isn't backed up: private dashboards, for example, show in the email as items listed but
+not handed over.
 
 ## Restoring
 
