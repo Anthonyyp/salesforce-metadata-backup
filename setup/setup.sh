@@ -217,3 +217,4 @@ fi
 echo
 echo "Next: the email settings (README), then Actions > Metadata backup > Run workflow."
 echo "A new app can take a few minutes before it accepts sign-ins."
+echo "Once a run by hand works, set the variable ENABLED to on: the nightly waits for it."

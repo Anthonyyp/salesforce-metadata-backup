@@ -76,6 +76,7 @@ has it on Windows).
    deliverability must allow it: sandboxes start at *System email only*, which blocks it.
 5. **Run it once:** Actions → Metadata backup → Run workflow. The first run commits everything. A new app can take a
    few minutes before it accepts sign-ins.
+6. **Turn the nightly on:** set `ENABLED` to `on`. Until then only Run workflow runs it.
 
 ### By hand
 
@@ -129,6 +130,7 @@ and deletes the key. Without the GitHub CLI it prints them for you to enter. Rea
 
 - **Another name:** `BACKUP_NAME=Another_Name setup/setup.sh ...` names both the permission set and the app. It stops,
   changing nothing, if the org already has one by that name that it didn't make.
+- **It doesn't set `ENABLED`:** run it once by hand, then turn it on.
 - **Running it again** makes a new key and resets the app's settings, including any changed by hand.
 
 ### About the app and the key
@@ -152,6 +154,7 @@ Settings → Secrets and variables → Actions.
 | Secret | `SF_JWT_KEY` | The private key matching the app's certificate |
 | Secret | `SF_CLIENT_ID` | The app's consumer key |
 | Variable | `SF_USERNAME` | The Salesforce user it signs in as |
+| Variable | `ENABLED` | `on` runs it every night. Anything else: only Run workflow does |
 | Variable | `SF_LOGIN_URL` | `https://login.salesforce.com` (default), or `https://test.salesforce.com` for a sandbox |
 | Variable | `ORG_LABEL` | The org's name in the email |
 | Variable | `EMAIL` | `off` (default), `self` (sent from the backup user's address) or `org` (from `MAIL_FROM`) |
