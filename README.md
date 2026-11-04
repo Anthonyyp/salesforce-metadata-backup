@@ -65,8 +65,8 @@ complete profiles.
 
 ## Set it up for an org
 
-Two ways: by hand in Setup, or the setup script. Same result. Either way you need `openssl` for the key (Git Bash
-has it on Windows).
+Two ways: by hand in Setup, or the setup script. Same result. Either way you need `openssl` for the key (on Windows,
+Git for Windows has it).
 
 1. **Make a repo from this template** (Use this template → Create a new repository). **Private.**
 2. **A backup user:** its own user on the System Administrator profile, or you to start
@@ -81,13 +81,22 @@ has it on Windows).
 
 1. **The key and certificate**, in a folder outside the repo:
 
+   Mac, Linux or Git Bash:
+
    ```
    MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 1095 -keyout server.key -out server.crt -subj "/CN=metadata-backup"
    openssl x509 -enddate -noout -in server.crt
    ```
 
-   `MSYS_NO_PATHCONV=1` stops Git Bash on Windows turning `/CN=...` into a file path; it does nothing elsewhere. The
-   second line prints the expiry, e.g. `notAfter=Nov 3 13:28:34 2029 GMT`: that's `2029-11-03` for `CERT_EXPIRES`.
+   Windows PowerShell, with the `openssl` that comes with Git for Windows:
+
+   ```
+   & "C:\Program Files\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 -nodes -days 1095 -keyout server.key -out server.crt -subj "/CN=metadata-backup"
+   & "C:\Program Files\Git\usr\bin\openssl.exe" x509 -enddate -noout -in server.crt
+   ```
+
+   `MSYS_NO_PATHCONV=1` stops Git Bash turning `/CN=...` into a file path; it does nothing elsewhere. The second line
+   prints the expiry, e.g. `notAfter=Nov 3 13:28:34 2029 GMT`: that's `2029-11-03` for `CERT_EXPIRES`.
 2. **The permission set.** Setup → Permission Sets → New.
    - Label `GitHub Metadata Backup`; License `--None--`; Description
      `The metadata backup's user only. Holders can sign in with the backup's key.` (setup.sh knows its own set by
