@@ -45,7 +45,7 @@ IFS=$'\t' read -r profile email active <<< "$(query "SELECT Profile.Name, Email,
 [ -n "$profile" ] || { echo "No user $username in this org." >&2; exit 1; }
 [ "$active" = True ] || echo "Note: $username isn't active; it can't sign in until it is."
 me=$($py -c "import json,sys; print(json.load(sys.stdin)['result']['username'])" <<< "$(sf org display -o "$org" --json)")
-if [ "$(printf '%s' "$me" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$username" | tr 'A-Z' 'a-z')" ]; then
+if [ "$(printf '%s' "$me" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$username" | tr '[:upper:]' '[:lower:]')" ]; then
   echo "The backup user is you ($me): API Only User would lock you out of Salesforce's screens. Use a user of its own." >&2
   exit 1
 fi
