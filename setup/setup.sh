@@ -6,21 +6,26 @@
 #   setup/setup.sh <org alias> <backup user's username> [owner/repo]
 #   setup/setup.sh myorg backup@acme.com me/acme-metadata-backup
 #
-# The backup user: a user of its own on System Administrator (README). This gives it the Metadata Backup permission set
-# (API Only User, Password Never Expires), and the app lets in only users holding that set.
+# The backup user: a user of its own on System Administrator (README). This gives it the GitHub Metadata Backup
+# permission set (API Only User, Password Never Expires), and the app lets in only users holding that set.
 # Needs sf, openssl and Python; gh (signed in) to set the repo's settings, otherwise it prints them for you to enter.
 # The key is made in setup/out/ (gitignored) and deleted once the repo has it.
-# APP_NAME sets the app's API name (default Metadata_Backup); SF_CLIENT_ID skips the question for its consumer key.
+# BACKUP_NAME sets the API name of the permission set and the app (default GitHub_Metadata_Backup); SF_CLIENT_ID skips
+# the question for the app's consumer key.
 set -euo pipefail
 
 usage='usage: setup.sh <org alias> <backup username> [owner/repo]'
 org=${1:?$usage}
 username=${2:?$usage}
 repo=${3:-}
-app=${APP_NAME:-Metadata_Backup}
+name=${BACKUP_NAME:-GitHub_Metadata_Backup}
+app=$name
+case "$name" in
+  *__*|*_|[!A-Za-z]*|*[!A-Za-z0-9_]*) echo "BACKUP_NAME: letters, numbers and single underscores, starting with a letter." >&2; exit 1 ;;
+esac
+label=${name//_/ }
 here=$(cd "$(dirname "$0")" && pwd)
 out="$here/out"
-mkdir -p "$out"
 # python3 on Mac and Linux; on Windows "python3" can be a Store stub, so try it before trusting it.
 py=python3; $py -c 1 2>/dev/null || py=python
 command -v "$py" > /dev/null || { echo "Needs Python (python3 or python)." >&2; exit 1; }
@@ -45,9 +50,36 @@ IFS=$'\t' read -r profile email active <<< "$(query "SELECT Profile.Name, Email,
 [ -n "$profile" ] || { echo "No user $username in this org." >&2; exit 1; }
 [ "$active" = True ] || echo "Note: $username isn't active; it can't sign in until it is."
 me=$($py -c "import json,sys; print(json.load(sys.stdin)['result']['username'])" <<< "$(sf org display -o "$org" --json)")
-if [ "$(printf '%s' "$me" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$username" | tr '[:upper:]' '[:lower:]')" ]; then
-  echo "The backup user is you ($me): API Only User would lock you out of Salesforce's screens. Use a user of its own." >&2
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+# What this makes carries these descriptions; a permission set or app of the same name without them is someone else's.
+ps_desc="The metadata backup's user only. Holders can sign in with the backup's key."
+app_desc="Signs the nightly GitHub Actions metadata backup in, by JWT. Retrieves only."
+taken() {
+  echo "This org already has $1 named $name that setup.sh didn't make, and running on would replace it." >&2
+  echo "Nothing was changed. Pick another name and run again: BACKUP_NAME=Another_Name setup/setup.sh $org $username${repo:+ $repo}" >&2
   exit 1
+}
+IFS=$'\t' read -r ps_found ps_has <<< "$(query "SELECT Id, Description FROM PermissionSet WHERE Name = '$name'" Id Description)"
+[ -z "$ps_found" ] || [ "$ps_has" = "$ps_desc" ] || taken "a permission set"
+IFS=$'\t' read -r app_found app_has <<< "$(query "SELECT Id, Description FROM ExternalClientApplication WHERE DeveloperName = '$name'" Id Description)"
+[ -z "$app_found" ] || [ "$app_has" = "$app_desc" ] || taken "an External Client App"
+# The permission set is the app's lock: whoever holds it can sign in with the key. Only the backup user may hold it,
+# and a holder about to get API Only User would lose Salesforce's screens, so stop before changing anything.
+others=$(sf data query -o "$org" --json -q "SELECT Assignee.Username FROM PermissionSetAssignment WHERE PermissionSet.Name = '$name'" \
+  | $py -c "import json,sys; print(' '.join(r['Assignee']['Username'] for r in json.load(sys.stdin)['result']['records'] if r['Assignee']['Username'].lower() != sys.argv[1]))" "$(lower "$username")")
+if [ -n "$others" ]; then
+  echo "Permission set $label is held by $others too: only the backup user may hold it. Remove it from them" >&2
+  echo "($instance/lightning/setup/PermSets/home > $label > Manage Assignments), then run this again." >&2
+  exit 1
+fi
+if [ "$(lower "$me")" = "$(lower "$username")" ]; then
+  # You: no API Only User (it would lock you out of the screens). Move to a user of its own later (README).
+  user_perms=""
+  echo "Note: the backup user is you; the permission set leaves out API Only User and Password Never Expires."
+else
+  user_perms="
+    <userPermissions><enabled>true</enabled><name>ApiUserOnly</name></userPermissions>
+    <userPermissions><enabled>true</enabled><name>PasswordNeverExpires</name></userPermissions>"
 fi
 [ "$profile" = "System Administrator" ] || echo "Note: $username is on $profile; the README recommends System Administrator."
 if [ "$(query "SELECT IsSandbox FROM Organization" IsSandbox)" = True ]; then
@@ -57,6 +89,7 @@ else
 fi
 echo "Org: $instance. Backup user: $username (profile $profile)."
 
+mkdir -p "$out"
 if [ -f "$out/server.key" ]; then
   echo "Reusing the key in $out (delete that folder for a new one)."
 else
@@ -79,24 +112,22 @@ echo '{"packageDirectories":[{"path":"force-app","default":true}]}' > "$proj/sfd
 x() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 ns='xmlns="http://soap.sforce.com/2006/04/metadata"'
 # Only holders of this set can sign in through the app; API Only User keeps the backup user out of the screens.
-cat > "$d/permissionsets/Metadata_Backup.permissionset-meta.xml" <<EOF
+cat > "$d/permissionsets/$name.permissionset-meta.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <PermissionSet $ns>
-    <description>The metadata backup's user only. Holders can sign in with the backup's key.</description>
+    <description>$(x "$ps_desc")</description>
     <hasActivationRequired>false</hasActivationRequired>
-    <label>Metadata Backup</label>
-    <userPermissions><enabled>true</enabled><name>ApiUserOnly</name></userPermissions>
-    <userPermissions><enabled>true</enabled><name>PasswordNeverExpires</name></userPermissions>
+    <label>$label</label>$user_perms
 </PermissionSet>
 EOF
 cat > "$d/externalClientApps/$app.eca-meta.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <ExternalClientApplication $ns>
     <contactEmail>$(x "$email")</contactEmail>
-    <description>Signs the nightly GitHub Actions metadata backup in, by JWT. Retrieves only.</description>
+    <description>$(x "$app_desc")</description>
     <distributionState>Local</distributionState>
     <isProtected>false</isProtected>
-    <label>Metadata Backup</label>
+    <label>$label</label>
 </ExternalClientApplication>
 EOF
 cat > "$d/extlClntAppOauthSettings/${app}_oauth.ecaOauth-meta.xml" <<EOF
@@ -124,7 +155,7 @@ EOF
 cat > "$d/extlClntAppOauthPolicies/${app}_oauthPlcy.ecaOauthPlcy-meta.xml" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtlClntAppOauthConfigurablePolicies $ns>
-    <commaSeparatedPermissionSet>Metadata_Backup</commaSeparatedPermissionSet>
+    <commaSeparatedPermissionSet>$name</commaSeparatedPermissionSet>
     <externalClientApplication>$app</externalClientApplication>
     <!-- GitHub's runners have no fixed IP, so the org's IP ranges can't apply; the certificate is the lock. -->
     <ipRelaxationPolicyType>Bypass</ipRelaxationPolicyType>
@@ -142,11 +173,11 @@ cat > "$d/extlClntAppPolicies/${app}_plcy.ecaPlcy-meta.xml" <<EOF
 </ExtlClntAppConfigurablePolicies>
 EOF
 (cd "$proj" && sf project deploy start -o "$org" --source-dir force-app --wait 10 > /dev/null)
-echo "External Client App Metadata Backup ($app) is in the org."
-if [ -z "$(query "SELECT Id FROM PermissionSetAssignment WHERE PermissionSet.Name = 'Metadata_Backup' AND Assignee.Username = '$username'" Id)" ]; then
-  sf org assign permset -o "$org" --name Metadata_Backup --on-behalf-of "$username" > /dev/null
+echo "External Client App $label ($app) is in the org."
+if [ -z "$(query "SELECT Id FROM PermissionSetAssignment WHERE PermissionSet.Name = '$name' AND Assignee.Username = '$username'" Id)" ]; then
+  sf org assign permset -o "$org" --name "$name" --on-behalf-of "$username" > /dev/null
 fi
-echo "Permission set Metadata Backup is assigned to $username."
+echo "Permission set $label is assigned to $username."
 
 # The consumer key (not a secret) comes back on a retrieve. If it doesn't, Setup shows it after an email code.
 # Don't turn on the org setting that also hands apps' consumer secrets to metadata retrieves: this backup's too.
@@ -160,7 +191,7 @@ rm -rf "$proj"
 if [ -z "$client_id" ]; then
   echo
   echo "Copy the app's consumer key: $instance/lightning/setup/ManageExternalClientApplication/home"
-  echo "  Metadata Backup > Settings > OAuth Settings > Consumer Key and Secret (Salesforce emails you a code)."
+  echo "  $label > Settings > OAuth Settings > Consumer Key and Secret (Salesforce emails you a code)."
   read -r -p "Paste the consumer key: " client_id < /dev/tty
 fi
 [ -n "$client_id" ] || { echo "No consumer key; nothing was set." >&2; exit 1; }

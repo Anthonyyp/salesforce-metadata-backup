@@ -69,7 +69,8 @@ Two ways: by hand in Setup, or the setup script. Same result. Either way you nee
 has it on Windows).
 
 1. **Make a repo from this template** (Use this template → Create a new repository). **Private.**
-2. **A backup user:** its own user, on the System Administrator profile ([The backup user](#the-backup-user)).
+2. **A backup user:** its own user on the System Administrator profile, or you to start
+   ([The backup user](#the-backup-user)).
 3. **The sign-in.** By hand or by script, below.
 4. **Turn the email on** if you want it: `EMAIL` and `MAIL_TO` (below). Salesforce sends it, so the org's email
    deliverability must allow it: sandboxes start at *System email only*, which blocks it.
@@ -86,10 +87,11 @@ has it on Windows).
    ```
 
    The second line prints the expiry date, for `CERT_EXPIRES`.
-2. **The permission set.** Setup → Permission Sets → New: Label `Metadata Backup`. System Permissions: **API Only
-   User** and **Password Never Expires**. Assign it to the backup user, and to no one else.
+2. **The permission set.** Setup → Permission Sets → New: Label `GitHub Metadata Backup`. System Permissions: **API Only
+   User** and **Password Never Expires** (neither if the backup user is you). Assign it to the backup user, and to no
+   one else.
 3. **The app.** Setup → App Manager → the arrow next to New App → **New External Client App**.
-   - External Client App Name `Metadata Backup`; Contact Email yours; Distribution State **Local**.
+   - External Client App Name `GitHub Metadata Backup`; Contact Email yours; Distribution State **Local**.
    - **Enable OAuth.** Callback URL `http://localhost:1717/OauthRedirect`. Selected OAuth Scopes: *Manage user data
      via APIs (api)* and *Perform requests at any time (refresh_token, offline_access)*. JWT sign-in refuses an app
      without `refresh_token` ("refresh_token scope is required"), though it never uses one.
@@ -97,7 +99,7 @@ has it on Windows).
      off: the Metadata API refuses those tokens.
    - Create.
 4. **Its policies.** The app → Policies → Edit.
-   - App Policies: move **Metadata Backup** to **Selected Permission Sets**.
+   - App Policies: move **GitHub Metadata Backup** to **Selected Permission Sets**.
    - OAuth Policies: Permitted Users **Admin approved users are pre-authorized**; IP Relaxation **Relax IP
      restrictions**. Save.
 5. **Its consumer key.** The app → Settings → OAuth Settings → **Consumer Key and Secret** (Salesforce emails you a
@@ -114,16 +116,20 @@ On a computer with the Salesforce CLI signed in to the org, `openssl`, Python, a
 setup/setup.sh <org alias> <backup user's username> <owner/repo>
 ```
 
-It does the same steps: makes the key, deploys the permission set and the app **Metadata Backup**, assigns the
+It does the same steps: makes the key, deploys the permission set and the app **GitHub Metadata Backup**, assigns the
 permission set to the backup user, reads back the app's consumer key (or asks you to paste it from Setup), sets the repo's secrets and `SF_*` and `CERT_EXPIRES` variables,
 and deletes the key. Without the GitHub CLI it prints them for you to enter. Read it first: it deploys to your org.
+
+- **Another name:** `BACKUP_NAME=Another_Name setup/setup.sh ...` names both the permission set and the app. It stops,
+  changing nothing, if the org already has one by that name that it didn't make.
+- **Running it again** makes a new key and resets the app's settings, including any changed by hand.
 
 ### About the app and the key
 
 - **Why not a connected app:** since Spring '26, new connected apps can't be created without asking Salesforce
   Support. Existing ones keep working; an existing connected app with the same settings works the same.
 - **The key reaches whoever holds the permission set.** Anyone with the private key can sign in, from anywhere, as
-  any user with **Metadata Backup**: keep it on the backup user alone. GitHub's runners have no fixed IP address, so the app relaxes the org's IP
+  any user with **GitHub Metadata Backup**: keep it on the backup user alone. GitHub's runners have no fixed IP address, so the app relaxes the org's IP
   restrictions; the certificate is what keeps others out. If the key leaks, disable the app at once, then make a new
   key (below).
 - **Don't give the backup user *View External Client Apps Consumer Secrets in Metadata*,** and leave the org's
@@ -174,10 +180,12 @@ A user of its own, on the **System Administrator** profile. It costs a full Sale
 - **Why admin:** in testing, View All Data and Modify All Data on a lesser profile still missed objects, flows, auth
   providers and half of each profile, without an error. A clone of System Administrator may not get the permissions
   Salesforce adds in later releases, and the gap would be silent too.
-- **What keeps it safe:** the **Metadata Backup** permission set. API Only User keeps it out of Salesforce's screens;
+- **What keeps it safe:** the **GitHub Metadata Backup** permission set. API Only User keeps it out of Salesforce's screens;
   Password Never Expires stops an expired password from breaking the sign-in; and the app lets in only users holding it.
-- **Don't use yourself:** API Only User locks an admin out of the screens too. Never assign Metadata Backup to
-  anyone but the backup user.
+- **Yourself, to start:** works. Leave API Only User and Password Never Expires out of the permission set (they'd
+  lock you out of the screens); setup.sh does that when the backup user is you. To move to a user of its own later,
+  take GitHub Metadata Backup off yourself and run setup.sh again with the new user; it stops while anyone else holds it.
+- **Only the backup user holds GitHub Metadata Backup:** anyone holding it can sign in with the key.
 - **Other options:** a clone of System Administrator (check it against System Administrator after big releases), or
   View All Data and Modify All Data on a minimal profile, which misses things. The free Salesforce Integration
   license can't hold System Administrator.
