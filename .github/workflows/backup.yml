@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Refuse a public repo
+        id: private
         # The backup is the org's metadata: in a public repo, anyone could read it. Checked before signing in.
         env:
           GH_TOKEN: ${{ github.token }}
@@ -162,7 +163,7 @@ jobs:
 
       - name: Report
         # The summary goes on this run's page; with EMAIL on, Salesforce also emails it (see report.py).
-        if: always()
+        if: always() && steps.private.outcome == 'success'
         env:
           JOB_STATUS: ${{ job.status }}
           SHA: ${{ steps.commit.outputs.sha }}
@@ -185,7 +186,7 @@ jobs:
       - name: Keep the run's raw files
         # Salesforce's answer to each pull, the listing lines of the CLI's log, and the list of changes, for 14 days
         # on the run's page (Artifacts). For looking into a bad night; nothing secret is in them.
-        if: always()
+        if: always() && steps.private.outcome == 'success'
         run: |
           mkdir -p "$RUNNER_TEMP/run-files"
           cp -r "$RUNNER_TEMP/retrieve" "$RUNNER_TEMP/run-files/" 2>/dev/null || true
@@ -194,7 +195,7 @@ jobs:
           cat ~/.sf/sf-*.log 2>/dev/null | grep ConnectionResolver \
             | sed -E 's/00D[A-Za-z0-9]{12,15}![A-Za-z0-9._]+/[session id]/g' > "$RUNNER_TEMP/run-files/listing.log" || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: always() && steps.private.outcome == 'success'
         with:
           name: run-files
           path: ${{ runner.temp }}/run-files
