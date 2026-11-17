@@ -148,6 +148,11 @@ class Pull(unittest.TestCase):
         self.assertEqual(self.calls, [("batch-1.xml", 2)])
         self.assertEqual(self.skipped_rows(), [])
 
+    def test_a_bad_setting(self):
+        code, _ = self.run_main("five")
+        self.assertEqual(code, "SKIP_BROKEN is 'five': it takes a number, or off")
+        self.assertEqual(self.calls, [])
+
     def test_failures_not_from_an_item_stop_the_run(self):
         for name in ("auth-failure.json", "server-failure.json"):
             self.calls, self.always = [], name

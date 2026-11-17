@@ -100,8 +100,11 @@ def main():
     # Each line to the log as it happens, not after the CLI's.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
-    batches, folder, skipped_file, limit = sys.argv[1:5]
-    limit = 0 if limit.strip().lower() == "off" else int(limit)
+    batches, folder, skipped_file, setting = sys.argv[1:5]
+    setting = setting.strip().lower()
+    if setting != "off" and not setting.isdigit():
+        sys.exit(f"SKIP_BROKEN is {setting!r}: it takes a number, or off")
+    limit = 0 if setting == "off" else int(setting)
     os.makedirs(folder, exist_ok=True)
     open(skipped_file, "w").close()
     skipped, folders = 0, folder_types()
@@ -121,7 +124,7 @@ def main():
             if item is None or skipped >= limit:
                 if item is not None:
                     print(f"{item[0]} {item[1]} broke the pull, and {skipped} items are already left out"
-                          f" (SKIP_BROKEN is {limit}).")
+                          f" (SKIP_BROKEN is {setting}).")
                 failed(out, answer)
                 sys.exit(1)
             skipped += 1
