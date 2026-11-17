@@ -1,10 +1,12 @@
 // Keep what the org listed but didn't hand over.
 //
-// Usage: node keep_undelivered.js <retrieve folder>   (run from the repo, after the pull, before `git add`)
+// Usage: node keep_undelivered.js <retrieve folder> [skipped file]
+// (run from the repo, after the pull, before `git add`)
 //
 // A pull reports each item it was asked for and couldn't deliver ("Entity of type 'Flow' named 'X' cannot be
 // found"). Most are built-in items that were never in the backup. But one that is in the backup was listed by the
-// org tonight, so it hasn't been deleted: leave its files as they were instead of committing them as deleted.
+// org tonight, so it hasn't been deleted: leave its files as they were instead of committing them as deleted. The
+// same for the items pull.py left out because they broke a pull (the skipped file: type and name, tab between).
 // Uses the Salesforce CLI's own library to tell which files belong to which item. Prints the number kept.
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -26,6 +28,14 @@ for (const name of fs.existsSync(folder) ? fs.readdirSync(folder) : []) {
   for (const m of Array.isArray(messages) ? messages : [messages]) {
     const hit = /Entity of type '([^']+)' named '([^']+)' cannot be found/.exec(m?.problem ?? '');
     if (hit) notDelivered.add(`${hit[1]}:${hit[2]}`);
+  }
+}
+
+const skippedFile = process.argv[3];
+if (skippedFile && fs.existsSync(skippedFile)) {
+  for (const line of fs.readFileSync(skippedFile, 'utf8').split('\n')) {
+    const [type, name] = line.split('\t');
+    if (type && name) notDelivered.add(`${type}:${name}`);
   }
 }
 

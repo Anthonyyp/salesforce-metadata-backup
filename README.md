@@ -26,7 +26,7 @@ all of the free minutes. To cut it, set `REPORTS` to `off`, or leave out more ty
    that last edited the workflow's schedule, not to `MAIL_TO`. For a repo in an organization, Settings →
    Notifications → Custom routing sets which of that account's addresses it uses.
 6. **Keeps the run's raw files** for 14 days on the run's page (Artifacts): Salesforce's answer to each pull, the
-   listing lines of the CLI's log, and the list of changes. For looking into a bad night.
+   listing lines of the CLI's log, the list of changes, and any items left out. For looking into a bad night.
 
 ### What it handles that a plain retrieve doesn't
 
@@ -40,10 +40,15 @@ all of the free minutes. To cut it, set `REPORTS` to `off`, or leave out more ty
 - **Noise.** `CleanDataService` (the built-in geocoding rules) comes back in a different order every pull, so it's
   left out by default; otherwise every night would show one file changed.
 - **Blips.** Listing the org sends hundreds of calls at once, and one blip fails it, so it's tried 3 times, a minute
-  apart. Nothing else is retried: the CLI already rides out network errors while a pull runs, and tomorrow's run is
-  the retry for the rest.
-- **A bad night.** Failed pulls, and types that fail to list (the CLI leaves those out without a word), stop the
-  run before anything is committed. An item the org listed but didn't hand over is kept as it was, not recorded as
+  apart. Except for a broken item (below), nothing else is retried: the CLI already rides out network errors while
+  a pull runs, and tomorrow's run is the retry for the rest.
+- **A broken item.** One item Salesforce can't hand over whole fails its whole batch: a content asset whose file a
+  sandbox didn't copy, for one. When the error names the item, it's left out and the batch pulled again, up to 5 a
+  night (`SKIP_BROKEN`). Its files from the last backup are kept as they were, and the email and the run's page say
+  WARNING and list it. Left out of batch 1, it also takes its permissions out of profiles and permission sets that
+  night. Fix or delete it in the org, or leave its type out with `EXCLUDED_METADATA`.
+- **A bad night.** Other failed pulls, and types that fail to list (the CLI leaves those out without a word), stop
+  the run before anything is committed. An item the org listed but didn't hand over is kept as it was, not recorded as
   deleted. What raises no error is the backup user losing access: Salesforce just shows it less, and the backup
   records the rest as deleted. So a night that deletes more than a fifth of the backup (`ALERT_DELETED_PERCENT`),
   or of one type with 10 files or more, or the last of any type, says WARNING in the email's subject and on the
@@ -184,6 +189,7 @@ GitHub won't save a blank variable: to turn a setting off, set it to `off`.
 |---|---|---|
 | Variable | `EXCLUDED_METADATA` | More types to leave out, by Metadata API name, spaces between, e.g. `EmailTemplate Document`. Added to the defaults (`CleanDataService`, and reports and dashboards with `REPORTS` `off`). |
 | Variable | `BATCH_LIMIT` | Files per pull (default 9,000) |
+| Variable | `SKIP_BROKEN` | Items a night may leave out because they broke a pull (default 5; `off` stops the run at the first) |
 
 Leaving a type out later deletes its files from the backup on the next run, which can trip `BLOCK_DELETED_PERCENT`:
 set it to `off` for that run.
@@ -193,6 +199,9 @@ The schedule is the `cron` line at the top of `.github/workflows/backup.yml`: 06
 The Salesforce CLI and its dependencies are locked in `.github/sf-cli`. To raise it: change the version in
 `package.json`, run `npm install --package-lock-only` in that folder, commit both files, and run the workflow by hand
 once. The workflow's actions are pinned to commits; to raise one, swap in the commit of its newer release.
+
+`.github/tests` checks the handling of a broken item against the CLI's answers, recorded:
+`python3 -m unittest discover .github/tests`. Nothing there runs at night.
 
 The workflow stops before signing in if the repo is public.
 

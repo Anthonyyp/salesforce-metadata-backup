@@ -1,0 +1,15 @@
+{
+  "name": "MetadataTransferError",
+  "message": "Metadata API request failed: ApexClass metadata types require source files, but unpackaged\\classes\\Foo.cls is forceignored.",
+  "exitCode": 1,
+  "context": "RetrieveMetadata",
+  "data": {
+    "id": "09S000000000000AAA"
+  },
+  "stack": "MetadataTransferError: Metadata API request failed: ApexClass metadata types require source files, but unpackaged\\classes\\Foo.cls is forceignored.",
+  "cause": "undefined",
+  "warnings": [],
+  "code": "MetadataTransferError",
+  "status": 1,
+  "commandName": "RetrieveMetadata"
+}

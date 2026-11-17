@@ -1,0 +1,18 @@
+{
+  "status": 0,
+  "result": {
+    "done": true,
+    "id": "09S000000000000AAA",
+    "status": "Succeeded",
+    "success": true,
+    "messages": [
+      {
+        "fileName": "unpackaged/package.xml",
+        "problem": "Entity of type 'Flow' named 'Gone' cannot be found"
+      }
+    ],
+    "files": [],
+    "fileProperties": []
+  },
+  "warnings": []
+}

@@ -1,0 +1,15 @@
+{
+  "name": "MetadataTransferError",
+  "message": "Metadata API request failed: unpackaged/contentassets/Logo.asset-meta.xml: Expected source files for type 'ContentAsset'",
+  "exitCode": 1,
+  "context": "RetrieveMetadata",
+  "data": {
+    "id": "09S000000000000AAA"
+  },
+  "stack": "MetadataTransferError: Metadata API request failed: unpackaged/contentassets/Logo.asset-meta.xml: Expected source files for type 'ContentAsset'\n    at SfCommandError.from (file:///home/runner/work/_temp/node_modules/@salesforce/sf-plugins-core/lib/SfCommandError.js:48:16)\n    at RetrieveMetadata.catch (file:///home/runner/work/_temp/node_modules/@salesforce/sf-plugins-core/lib/sfCommand.js:333:47)\n    at RetrieveMetadata.catch (file:///home/runner/work/_temp/node_modules/@salesforce/plugin-deploy-retrieve/lib/commands/project/retrieve/start.js:290:27)\n    at RetrieveMetadata._run (/home/runner/work/_temp/node_modules/@oclif/core/lib/command.js:187:29)\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async Config.runCommand (/home/runner/work/_temp/node_modules/@oclif/core/lib/config/config.js:392:25)\n    at async run (/home/runner/work/_temp/node_modules/@oclif/core/lib/main.js:95:16)\n    at async file:///home/runner/work/_temp/node_modules/@salesforce/cli/bin/run.js:15:1",
+  "cause": "undefined",
+  "warnings": [],
+  "code": "MetadataTransferError",
+  "status": 1,
+  "commandName": "RetrieveMetadata"
+}

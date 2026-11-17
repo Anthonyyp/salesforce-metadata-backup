@@ -1,7 +1,8 @@
 """Report the night's backup: how many files changed and which, with a link to see the changes.
 
-Usage: report.py <changes.txt> <retrieve folder>
-changes.txt is `git diff --cached --name-status`; settings come from the environment (see backup.yml).
+Usage: report.py <changes.txt> <retrieve folder> [skipped file]
+changes.txt is `git diff --cached --name-status`; the skipped file is pull.py's list of items left out because they
+broke a pull. Settings come from the environment (see backup.yml).
 
 Always writes the report onto the run's page in GitHub (its summary). EMAIL also emails it to MAIL_TO, sent by
 Salesforce itself through its Send Email action, so no mail server or mailbox is needed:
@@ -79,6 +80,17 @@ def retrieve_warnings(folder):
     return total, batches
 
 
+def read_skipped(path):
+    """pull.py's items left out: (type, name, reason)."""
+    rows = []
+    if path and os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 4:
+                rows.append((parts[0], parts[1], parts[3]))
+    return rows
+
+
 def cert_line(env, today=None):
     """One line when the sign-in certificate (CERT_EXPIRES, YYYY-MM-DD) expires within 30 days; else blank."""
     value = (env.get("CERT_EXPIRES") or "").strip()
@@ -93,9 +105,9 @@ def cert_line(env, today=None):
     return f"The sign-in certificate expires {expires.day} {expires:%b %Y}: make a new one (README)."
 
 
-def build(env, rows, warnings, batches):
+def build(env, rows, warnings, batches, skipped=()):
     """The report as (subject, html, markdown)."""
-    subject, body, summary = build_report(env, rows, warnings, batches)
+    subject, body, summary = build_report(env, rows, warnings, batches, skipped)
     cert = cert_line(env)
     if cert:
         body = f"<p><b>{html.escape(cert)}</b></p>{body}"
@@ -103,7 +115,7 @@ def build(env, rows, warnings, batches):
     return subject, body, summary
 
 
-def build_report(env, rows, warnings, batches):
+def build_report(env, rows, warnings, batches, skipped=()):
     org = env.get("ORG_LABEL") or "Salesforce"
     run_url, repo_url = env["RUN_URL"], env["REPO_URL"]
     deleted, had = int(env.get("DELETED") or 0), int(env.get("HAD") or 0)
@@ -151,6 +163,18 @@ def build_report(env, rows, warnings, batches):
         note += (f" Kept {kept:,} item{'s' if kept != 1 else ''} the org listed but didn't hand over, as they were"
                  " (listed means not deleted).")
     subject = f"{org} metadata backup: {n} file{'s' if n != 1 else ''} changed"
+    left_h, left_md = "", []
+    if skipped:
+        k = len(skipped)
+        subject = f"{org} metadata backup: WARNING, {k} item{'s' if k != 1 else ''} left out"
+        it, them = ("they", "them") if k != 1 else ("it", "it")
+        left = (f"WARNING: {k} item{'s' if k != 1 else ''} left out: {it} broke the pull. The last backup's files for"
+                f" {them} are kept as they were. Fix or delete {them} in the org, or leave the type out with"
+                " EXCLUDED_METADATA.")
+        left_h = (f"<p><b>{html.escape(left)}</b></p><ul>"
+                  + "".join(f"<li>{html.escape(t)} <b>{html.escape(m)}</b>: {html.escape(why)}</li>"
+                            for t, m, why in skipped) + "</ul>")
+        left_md = [f"**{left}**", ""] + [f"- {t} `{m}`: {why}" for t, m, why in skipped] + [""]
     if env.get("ALERT") == "true":
         # Over ALERT_DELETED_PERCENT: say it first, since lost access looks exactly like this.
         subject = f"{org} metadata backup: WARNING, {deleted:,} files deleted"
@@ -158,10 +182,10 @@ def build_report(env, rows, warnings, batches):
         by_type = f" By type: {types}." if types else ""
         lead = (f"WARNING: {deleted:,} of {had:,} files deleted.{by_type} If nobody removed that much, check the"
                 f" backup user's access: once it's fixed, the next run puts them back. {lead}")
-    body = (f"<p>{html.escape(lead)}</p>{link_h}{''.join(h)}"
+    body = (f"{left_h}<p>{html.escape(lead)}</p>{link_h}{''.join(h)}"
             f'<p style="color:#666">{html.escape(note)}</p>'
             f'<p style="color:#666">The backup: <a href="{repo_url}">{repo_url}</a></p>')
-    summary = "\n".join([f"**{lead}**", "", link_md] + md + ["", note])
+    summary = "\n".join(left_md + [f"**{lead}**", "", link_md] + md + ["", note])
     return subject, body, summary
 
 
@@ -198,7 +222,8 @@ def main():
     if mode == "org" and not env.get("MAIL_FROM"):
         sys.exit("EMAIL is org but MAIL_FROM is blank: which organization-wide address sends it?")
     warnings, batches = retrieve_warnings(sys.argv[2])
-    subject, body, summary = build(env, read_changes(sys.argv[1]), warnings, batches)
+    subject, body, summary = build(env, read_changes(sys.argv[1]), warnings, batches,
+                                   read_skipped(sys.argv[3] if len(sys.argv) > 3 else None))
     body = f'<div style="font-family:Arial,sans-serif;font-size:14px">{body}</div>'
     if cert_line(env):
         print(f"::warning::{cert_line(env)}")
