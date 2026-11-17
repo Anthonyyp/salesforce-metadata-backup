@@ -97,6 +97,9 @@ def failed(out, answer):
 
 
 def main():
+    # Each line to the log as it happens, not after the CLI's.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     batches, folder, skipped_file, limit = sys.argv[1:5]
     limit = 0 if limit.strip().lower() == "off" else int(limit)
     os.makedirs(folder, exist_ok=True)
