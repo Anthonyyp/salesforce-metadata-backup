@@ -65,6 +65,10 @@ all of the free minutes. To cut it, set `REPORTS` to `off`, or leave out more ty
   nights instead, pin one: `"sourceApiVersion": "66.0"` in `sfdx-project.json`. Then nothing newer is backed up
   until you raise it.
 
+Experience Builder sites (`SiteDotCom`) are backed up as Builder's working copy, unpublished changes and all.
+Salesforce hands over nothing else: there's no published version to pull. The file is packed and can't be read or
+diffed, and it comes back different every pull, so the site shows as changed every night.
+
 App credentials and certificates are never committed: `.gitignore` leaves out certificates, connected apps and
 External Client Apps' OAuth settings, which hold consumer keys (and secrets, in an org that exposes them). Edit
 `.gitignore` to back them up anyway.
