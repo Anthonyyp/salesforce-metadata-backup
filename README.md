@@ -47,6 +47,11 @@ all of the free minutes. To cut it, set `REPORTS` to `off`, or leave out more ty
   night (`SKIP_BROKEN`). Its files from the last backup are kept as they were, and the email and the run's page say
   WARNING and list it. Left out of batch 1, it also takes its permissions out of profiles and permission sets that
   night. Fix or delete it in the org, or leave its type out with `EXCLUDED_METADATA`.
+- **Flows running an older version.** A pulled flow is its newest version, running or not: save a new version
+  without activating it and a plain retrieve holds the draft. `active_flows.py` asks the org which flows run an older
+  version than their newest, pulls that version by number, and puts it in the flow's own file, so the backup is what
+  runs. The email lists those flows. If that step fails, they hold their newest version that night, with a warning.
+  Flows that run nothing hold their newest.
 - **A bad night.** Other failed pulls, and types that fail to list (the CLI leaves those out without a word), stop
   the run before anything is committed. An item the org listed but didn't hand over is kept as it was, not recorded as
   deleted. What raises no error is the backup user losing access: Salesforce just shows it less, and the backup

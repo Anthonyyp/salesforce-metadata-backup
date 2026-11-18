@@ -1,8 +1,8 @@
 """Report the night's backup: how many files changed and which, with a link to see the changes.
 
-Usage: report.py <changes.txt> <retrieve folder> [skipped file]
+Usage: report.py <changes.txt> <retrieve folder> [skipped file] [flows file]
 changes.txt is `git diff --cached --name-status`; the skipped file is pull.py's list of items left out because they
-broke a pull. Settings come from the environment (see backup.yml).
+broke a pull; the flows file is active_flows.py's list of flows that run an older version than their newest. Settings come from the environment (see backup.yml).
 
 Always writes the report onto the run's page in GitHub (its summary). EMAIL also emails it to MAIL_TO, sent by
 Salesforce itself through its Send Email action, so no mail server or mailbox is needed:
@@ -91,6 +91,31 @@ def read_skipped(path):
     return rows
 
 
+def read_flows(path):
+    """active_flows.py's list: (name, running, newest), or one ("error", why, "")."""
+    rows = []
+    if path and os.path.exists(path):
+        for line in open(path, encoding="utf-8"):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 2:
+                rows.append((parts[0], parts[1], parts[2] if len(parts) > 2 else ""))
+    return rows
+
+
+def flows_text(flows):
+    """One paragraph on the flows whose running version isn't their newest; blank if none."""
+    if not flows:
+        return ""
+    if flows[0][0] == "error":
+        return (f"Couldn't put every flow's running version in place ({flows[0][1]}). Flows that run an older"
+                " version than their newest hold the newest tonight.")
+    k = len(flows)
+    listed = "; ".join(f"{name} (running version {run}, newest {new})" for name, run, new in flows)
+    return (f"{k} flow{'s run' if k != 1 else ' runs'} an older version than {'their' if k != 1 else 'its'}"
+            f" newest. The backup holds the running version; the newer {'ones aren' if k != 1 else 'one isn'}'t"
+            f" active: {listed}.")
+
+
 def cert_line(env, today=None):
     """One line when the sign-in certificate (CERT_EXPIRES, YYYY-MM-DD) expires within 30 days; else blank."""
     value = (env.get("CERT_EXPIRES") or "").strip()
@@ -105,9 +130,13 @@ def cert_line(env, today=None):
     return f"The sign-in certificate expires {expires.day} {expires:%b %Y}: make a new one (README)."
 
 
-def build(env, rows, warnings, batches, skipped=()):
+def build(env, rows, warnings, batches, skipped=(), flows=()):
     """The report as (subject, html, markdown)."""
     subject, body, summary = build_report(env, rows, warnings, batches, skipped)
+    note = flows_text(flows) if env.get("JOB_STATUS") == "success" else ""
+    if note:
+        body = f"{body}<p>{html.escape(note)}</p>"
+        summary = f"{summary}\n\n{note}"
     cert = cert_line(env)
     if cert:
         body = f"<p><b>{html.escape(cert)}</b></p>{body}"
@@ -223,7 +252,8 @@ def main():
         sys.exit("EMAIL is org but MAIL_FROM is blank: which organization-wide address sends it?")
     warnings, batches = retrieve_warnings(sys.argv[2])
     subject, body, summary = build(env, read_changes(sys.argv[1]), warnings, batches,
-                                   read_skipped(sys.argv[3] if len(sys.argv) > 3 else None))
+                                   read_skipped(sys.argv[3] if len(sys.argv) > 3 else None),
+                                   read_flows(sys.argv[4] if len(sys.argv) > 4 else None))
     body = f'<div style="font-family:Arial,sans-serif;font-size:14px">{body}</div>'
     if cert_line(env):
         print(f"::warning::{cert_line(env)}")
